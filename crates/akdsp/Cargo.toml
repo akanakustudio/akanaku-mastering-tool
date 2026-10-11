@@ -7,4 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+hound = "3.5.1"
 libm = "0.2"
+realfft = "3.5.0"
+serde = { version = "1.0.229", features = ["derive"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["wav", "aiff", "pcm", "flac", "mp3", "aac", "isomp4", "alac"] }

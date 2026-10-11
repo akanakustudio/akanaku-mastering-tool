@@ -1,6 +1,6 @@
 // Main-thread controller for the player worklet (detailed design 12).
 import workletUrl from "./player.worklet.ts?worker&url";
-import { CTL_LENGTH, Ctl, F32, F32_LENGTH, Mode, SAMPLE_RATE, createChunkPool, fillPool, type ChunkPool, type ModeValue } from "./layout";
+import { CTL_LENGTH, Ctl, F32, F32_LENGTH, Mode, SAMPLE_RATE, SLOT_FRAMES, SPARE_SLOTS, createChunkPool, fillPool, type ChunkPool, type ModeValue } from "./layout";
 import type { PlayerOptions } from "./player.worklet";
 import { SlotAllocator } from "./slotAllocator";
 
@@ -17,7 +17,8 @@ export class Player {
   constructor(before: Stereo, after: Stereo) {
     const frames = before.left.length;
     this.before = createChunkPool(frames);
-    this.after = createChunkPool(frames);
+    // Enough spare slots to replace the whole After track after a full render.
+    this.after = createChunkPool(frames, Math.ceil(frames / SLOT_FRAMES) + SPARE_SLOTS);
     fillPool(this.before, before.left, before.right);
     fillPool(this.after, after.left, after.right);
     this.ctl[Ctl.TOTAL_FRAMES] = frames;
@@ -98,6 +99,26 @@ export class Player {
   setGains(before: number, delta: number) {
     this.f32[F32.GAIN_BEFORE] = before;
     this.f32[F32.GAIN_DELTA] = delta;
+  }
+
+  /**
+   * Swaps in a new After render second by second while playing (detailed design 12.5).
+   * The new data is the same length as the old one.
+   */
+  async replaceAfter(after: Stereo) {
+    for (let sec = 0; sec < this.after.seconds; sec++) {
+      const from = sec * SLOT_FRAMES;
+      const to = Math.min(from + SLOT_FRAMES, after.left.length);
+      const write = (l: Float32Array, r: Float32Array) => {
+        l.set(after.left.subarray(from, to));
+        r.set(after.right.subarray(from, to));
+        if (to - from < SLOT_FRAMES) {
+          l.fill(0, to - from);
+          r.fill(0, to - from);
+        }
+      };
+      while (!this.afterSlots.replace(sec, write)) await new Promise((r) => setTimeout(r, 5));
+    }
   }
 
   async close() {

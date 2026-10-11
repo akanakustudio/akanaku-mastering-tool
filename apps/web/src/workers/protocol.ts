@@ -15,7 +15,61 @@ export type FromWorker = Res | Progress | Log;
 export interface DspMethods {
   init: { params: void; result: { engineVersion: string; simd: boolean } };
   selfTest: { params: void; result: SelfTestResult };
+  load: { params: { bytes: ArrayBuffer; name: string }; result: LoadResult };
+  render: { params: { settings: MasterSettings }; result: RenderResult };
+  exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer } };
 }
+
+/** Mirrors akdsp::master::MasterSettings. */
+export type MasterSettings = {
+  cleanup: number; // 0..1
+  tone: number; // -1..1
+  width: number; // 0..1.5
+  monoBelowHz: number;
+  targetLufs: number;
+  ceilingDbtp: number;
+};
+
+/** Mirrors akdsp::analysis::Analysis. */
+export type Analysis = {
+  lufs: number;
+  truePeak: number;
+  samplePeak: number;
+  plr: number;
+  l95: number;
+  lra: number;
+  shortTerm: number[];
+};
+
+export type RenderReport = {
+  appliedGainDb: number;
+  iterations: number;
+  truePeakTrimDb: number;
+  meanGainReductionDb: number;
+  maxGainReductionDb: number;
+};
+
+export type StereoData = { left: Float32Array; right: Float32Array };
+/** Peak pyramid: bin size (frames) -> [min, max, rms] per bin. */
+export type Pyramid = Record<number, Float32Array>;
+
+export type LoadResult = {
+  sampleRateIn: number;
+  channelsIn: number;
+  frames: number;
+  sampleRate: number;
+  before: Analysis;
+  audio: StereoData;
+  peaks: Pyramid;
+};
+
+export type RenderResult = {
+  after: Analysis;
+  report: RenderReport;
+  audio: StereoData;
+  peaks: { after: Pyramid; diff: Pyramid };
+  gainDelta: Float32Array;
+};
 
 export type SelfTestResult = {
   rmsDbfs: number;

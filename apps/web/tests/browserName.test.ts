@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browserName } from "../src/app/App";
+import { browserName } from "../src/app/P0Page";
 
 describe("browserName", () => {
   it.each([
