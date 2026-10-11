@@ -9,13 +9,98 @@
     "user_master": "Mastered by the user, e.g. in Logic Pro (48 kHz / 24-bit). Human reference / target."
   },
   "albums": {
-    "SUMS": "STILL UNDER MY SKIN — earlier songs rebuilt in the world of the new album. Album-balance test set (P2)."
+    "SUMS": {
+      "title": "STILL UNDER MY SKIN",
+      "artist": "Akanaku Studio",
+      "description": "Main part (tracks 1-9) ends with 夜が明ける; tracks 10-13 are bonus tracks rebuilt as SUMS Ver. Track order confirmed 2026-10-09. Album-balance test set (P2).",
+      "tracks": [
+        {
+          "no": 1,
+          "songId": "shadanki",
+          "bonus": false,
+          "listedLength": "3:26"
+        },
+        {
+          "no": 2,
+          "songId": "amefuru-mori",
+          "bonus": false,
+          "listedLength": "4:32"
+        },
+        {
+          "no": 3,
+          "songId": "sanban-tart",
+          "bonus": false,
+          "listedLength": "3:18"
+        },
+        {
+          "no": 4,
+          "songId": "texture",
+          "bonus": false,
+          "listedLength": "3:39"
+        },
+        {
+          "no": 5,
+          "songId": "yoru-juji-han",
+          "bonus": false,
+          "listedLength": "3:28"
+        },
+        {
+          "no": 6,
+          "songId": "daidai-iro",
+          "bonus": false,
+          "listedLength": "3:27"
+        },
+        {
+          "no": 7,
+          "songId": "under-my-skin",
+          "bonus": false,
+          "listedLength": "3:26"
+        },
+        {
+          "no": 8,
+          "songId": "ao-ni-kawaru",
+          "bonus": false,
+          "listedLength": "4:21"
+        },
+        {
+          "no": 9,
+          "songId": "yoru-ga-akeru",
+          "bonus": false,
+          "listedLength": "3:54"
+        },
+        {
+          "no": 10,
+          "songId": "monokuro-no-hana",
+          "bonus": true,
+          "listedLength": null
+        },
+        {
+          "no": 11,
+          "songId": "zanzo-flashback",
+          "bonus": true,
+          "listedLength": "3:19"
+        },
+        {
+          "no": 12,
+          "songId": "music-traveler",
+          "bonus": true,
+          "listedLength": "4:02"
+        },
+        {
+          "no": 13,
+          "songId": "akanakuni",
+          "bonus": true,
+          "listedLength": "4:21"
+        }
+      ]
+    }
   },
   "songs": [
     {
       "id": "monokuro-no-hana",
       "title": "モノクロの花",
       "album": "SUMS",
+      "albumTitle": "モノクロの花 (SUMS Ver.)",
       "files": {
         "suno": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.wav",
         "studio_multitrack": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.zip"
@@ -34,6 +119,7 @@
       "id": "music-traveler",
       "title": "MUSIC✦TRAVELER",
       "album": "SUMS",
+      "albumTitle": "ミュージックトラベラー (SUMS Ver.)",
       "files": {
         "suno": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoMaster.wav",
         "studio_multitrack": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoStem.zip"
@@ -43,6 +129,7 @@
       "id": "akanakuni",
       "title": "アカナクニ",
       "album": "SUMS",
+      "albumTitle": "アカナクニ (SUMS Ver.)",
       "files": {
         "suno": "✦5 アカナクニ (SUMS Ver.)-SunoMaster.wav",
         "studio_multitrack": "✦5 アカナクニ (SUMS Ver.)-SunoStem.zip"
@@ -52,6 +139,7 @@
       "id": "zanzo-flashback",
       "title": "残像フラッシュバック",
       "album": "SUMS",
+      "albumTitle": "残像フラッシュバック (SUMS Ver.)",
       "files": {
         "suno": "✦5 残像フラッシュバック (SUMS Ver.)-SunoMaster.wav",
         "studio_multitrack": "✦5 残像フラッシュバック (SUMS Ver.)-SunoStem.zip"
@@ -60,6 +148,7 @@
     {
       "id": "under-my-skin",
       "title": "アンダーマイスキン",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 アンダーマイスキン-SunoStem.zip",
         "user_mix": "アンダーマイスキン-Mix.wav"
@@ -68,6 +157,7 @@
     {
       "id": "yoru-juji-han",
       "title": "夜十時半",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 夜十時半-SunoStem.zip",
         "user_mix": "夜十時半-Mix.wav"
@@ -76,6 +166,7 @@
     {
       "id": "ao-ni-kawaru",
       "title": "青に変わる",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 青に変わる-SunoStem.zip",
         "user_mix": "青に変わる-Mix.wav"
@@ -84,6 +175,7 @@
     {
       "id": "texture",
       "title": "テクスチャ",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 テクスチャ-SunoStem.zip",
         "user_mix": "テクスチャ-Mix.wav"
@@ -92,6 +184,7 @@
     {
       "id": "sanban-tart",
       "title": "三番タルト",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 三番タルト-SunoStem.zip",
         "user_mix": "三番タルト-Mix.wav"
@@ -100,6 +193,7 @@
     {
       "id": "daidai-iro",
       "title": "橙色",
+      "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 橙色-SunoStem.zip",
         "user_mix": "橙色-Mix.wav"
@@ -108,6 +202,7 @@
     {
       "id": "shadanki",
       "title": "遮断機",
+      "album": "SUMS",
       "files": {
         "studio_mix": "遮断機-SunoMaster.wav",
         "studio_multitrack": "✦7 遮断機-SunoStem.zip"
@@ -116,6 +211,7 @@
     {
       "id": "amefuru-mori",
       "title": "雨降ル森",
+      "album": "SUMS",
       "files": {
         "studio_mix": "雨降ル森-SunoMaster.wav",
         "studio_multitrack": "✦6 雨降ル森-SunoStem.zip"
