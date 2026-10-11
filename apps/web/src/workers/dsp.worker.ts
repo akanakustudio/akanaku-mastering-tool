@@ -1,7 +1,8 @@
 // DSP worker: loads the Rust/WASM engine and runs jobs off the main thread
 // (detailed design 3.1, 18.3).
 import { Zip, ZipPassThrough } from "fflate";
-import init, { Engine, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
+import { applyFades } from "../features/album/fade";
+import init, { Engine, album_tone_plan, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
 import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
 import type { Analysis, CancelToken, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
 import { cueSheet, dataChunk, pcmHeader, safeFileName } from "./wav";
@@ -138,6 +139,7 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       for (const [i, t] of p.tracks.entries()) {
         progress(`export ${i + 1}/${p.tracks.length}`, i / p.tracks.length);
         const { left, right } = await readStereo(`album/${t.key}.f32`);
+        applyFades(left, right, t.fadeInSec, t.fadeOutSec, 48_000);
         const wav = encode_wav_planar(left, right, p.sampleRate, p.bits, p.ceilingDbtp);
         if (p.perTrack) {
           const name = `${String(i + 1).padStart(2, "0")} ${safeFileName(t.title)}.wav`;
@@ -213,6 +215,17 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       }
     }
     return { result: { files, zip } };
+  },
+
+  async readStored({ key }) {
+    const r = await readStereo(`album/${key}.f32`);
+    return { result: r, transfer: [r.left.buffer, r.right.buffer] };
+  },
+
+  async albumTonePlan({ spectra, toneMatch, amount }) {
+    await handlers.init();
+    const result = album_tone_plan(spectra, toneMatch, amount);
+    return { result, transfer: [result.buffer] };
   },
 
   async exportWav({ sampleRate, bits }) {

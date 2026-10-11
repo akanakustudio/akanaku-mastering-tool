@@ -156,10 +156,15 @@ pub fn convolve(x: &[f32], h: &[f32]) -> Vec<f32> {
     out
 }
 
-/// Applies `amount` × `deviation` to both channels. Returns the input unchanged at amount 0.
-pub fn apply_tone_match(x: &Stereo, sr: u32, deviation: &[f32], amount: f32) -> (Stereo, Vec<f32>) {
-    let curve: Vec<f32> = deviation.iter().map(|d| d * amount).collect();
-    if amount <= 0.0 || curve.iter().all(|c| c.abs() < 0.01) {
+/// `amount` × `deviation`, plus the album correction (`extra`, empty = none), in dB.
+pub fn total_curve(deviation: &[f32], amount: f32, extra: &[f32]) -> Vec<f32> {
+    deviation.iter().enumerate().map(|(k, d)| d * amount + if extra.len() == POINTS { extra[k] } else { 0.0 }).collect()
+}
+
+/// Applies `total_curve` to both channels. Returns the input unchanged when the curve is flat.
+pub fn apply_tone_match(x: &Stereo, sr: u32, deviation: &[f32], amount: f32, extra: &[f32]) -> (Stereo, Vec<f32>) {
+    let curve = total_curve(deviation, amount, extra);
+    if curve.iter().all(|c| c.abs() < 0.01) {
         return (x.clone(), curve);
     }
     let h = design_fir(&curve, sr);

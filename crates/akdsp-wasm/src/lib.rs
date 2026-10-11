@@ -128,7 +128,7 @@ impl Engine {
         let r = render(&self.source, INTERNAL_SAMPLE_RATE, &s, &mut self.cache, &mut js_progress(on_progress))
             .map_err(|_| JsError::new(CANCELLED))?;
         let after = analyze(&r.audio, INTERNAL_SAMPLE_RATE);
-        let js = to_js(&RenderInfo { after: &after, report: &r.report, stats: &r.stats, settings: s });
+        let js = to_js(&RenderInfo { after: &after, report: &r.report, stats: &r.stats, settings: s.clone() });
         self.after = Some((r.audio, after, s));
         js
     }
@@ -239,6 +239,8 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
         sample_rate_in: u32,
         channels_in: usize,
         analysis: Analysis,
+        /// Average spectrum at akdsp::dsp::eq::POINTS (album tone harmonisation, 10.3).
+        spectrum: Vec<f32>,
     }
     let d = decode(bytes, extension.as_deref()).map_err(|e| JsError::new(&e.to_string()))?;
     let x = if d.sample_rate == INTERNAL_SAMPLE_RATE {
@@ -246,7 +248,13 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
     } else {
         Stereo::new(resample(&d.audio.l, d.sample_rate, INTERNAL_SAMPLE_RATE), resample(&d.audio.r, d.sample_rate, INTERNAL_SAMPLE_RATE))
     };
-    to_js(&Info { frames: x.len(), sample_rate_in: d.sample_rate, channels_in: d.channels, analysis: analyze(&x, INTERNAL_SAMPLE_RATE) })
+    to_js(&Info {
+        frames: x.len(),
+        sample_rate_in: d.sample_rate,
+        channels_in: d.channels,
+        analysis: analyze(&x, INTERNAL_SAMPLE_RATE),
+        spectrum: akdsp::dsp::eq::average_spectrum_db(&x, INTERNAL_SAMPLE_RATE),
+    })
 }
 
 /// Encodes 48 kHz planar audio as a WAV file (album export).
@@ -255,4 +263,13 @@ pub fn encode_wav_planar(left: Vec<f32>, right: Vec<f32>, sample_rate: u32, bits
     let x = Stereo::new(left, right);
     let enc = encode_wav(&x, INTERNAL_SAMPLE_RATE, sample_rate, bits, ceiling_dbtp).map_err(|e| JsError::new(&e.to_string()))?;
     Ok(enc.bytes)
+}
+
+/// Album tone harmonisation (detailed design 10.3). `spectra` holds each track's spectrum
+/// (akdsp::dsp::eq::POINTS values each, concatenated); returns the corrections the same way.
+#[wasm_bindgen]
+pub fn album_tone_plan(spectra: Vec<f32>, tone_match: f32, amount: f32) -> Vec<f32> {
+    let n = akdsp::dsp::eq::POINTS;
+    let list: Vec<Vec<f32>> = spectra.chunks(n).filter(|c| c.len() == n).map(<[f32]>::to_vec).collect();
+    akdsp::album::tone_plan(&list, tone_match, amount).concat()
 }

@@ -31,12 +31,16 @@ export interface DspMethods {
   /** `key` is a path under OPFS album/ unless `path` gives the full OPFS path. */
   openStored: { params: { file: File; key: string; path?: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
   exportAlbum: { params: ExportAlbumParams; result: { files: string[]; zip: string | null } };
+  /** Reads a stored album render (After) back, e.g. for continuous playback. */
+  readStored: { params: { key: string }; result: StereoData };
+  /** Album tone harmonisation (detailed design 10.3); spectra/result are POINTS values per track, concatenated. */
+  albumTonePlan: { params: { spectra: Float32Array; toneMatch: number; amount: number }; result: Float32Array };
 }
 
-export type FileInfo = { frames: number; sampleRateIn: number; channelsIn: number; analysis: Analysis };
+export type FileInfo = { frames: number; sampleRateIn: number; channelsIn: number; analysis: Analysis; spectrum: number[] };
 
 export type ExportAlbumParams = {
-  tracks: { key: string; title: string; gapAfterSec: number }[];
+  tracks: { key: string; title: string; gapAfterSec: number; fadeInSec: number; fadeOutSec: number }[];
   albumTitle: string;
   sampleRate: number;
   bits: 16 | 24;
@@ -62,6 +66,8 @@ export type MasterSettings = {
   /** "integrated" for singles and the album anchor, "l95" for the other album tracks. */
   targetMode?: "integrated" | "l95";
   ceilingDbtp: number;
+  /** Album tone correction (detailed design 10.3), dB at the 61 tone points. */
+  albumTone?: number[];
 };
 
 /** Mirrors akdsp::analysis::Analysis. */

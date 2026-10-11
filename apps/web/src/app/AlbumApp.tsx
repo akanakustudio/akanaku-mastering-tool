@@ -2,6 +2,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
 import { anchorId, initialOrder, l95Goal, titleFromFileName } from "../features/album/plan";
+import { AlbumSequence, type SeqState } from "../features/album/sequence";
+import { Timeline } from "../features/album/Timeline";
 import { DEFAULT_SETTINGS } from "../features/settings/settings";
 import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
@@ -13,7 +15,18 @@ import "./AlbumApp.css";
 const AUDIO_EXT = /\.(wav|wave|aif|aiff|flac|mp3|m4a|mp4|aac|caf)$/i;
 const STAGE_LABEL: Record<string, string> = { cleanup: "ノイズ除去", tone: "音色・コンプ・ステレオ", limiter: "音圧調整", verify: "ピークの確認", store: "保存", zip: "ZIP の作成" };
 
-type Result = { after: Analysis; report: RenderReport; version: number; offsetDb: number; goal: number; anchor: boolean };
+type Result = {
+  after: Analysis;
+  report: RenderReport;
+  version: number;
+  offsetDb: number;
+  goal: number;
+  anchor: boolean;
+  /** Track set the album tone plan was computed for (sorted ids). */
+  planKey?: string;
+  /** Largest album tone correction applied to this track, dB. */
+  albumToneMaxDb?: number;
+};
 type AlbumTrack = {
   id: string;
   file: File;
@@ -21,7 +34,11 @@ type AlbumTrack = {
   frames: number;
   sampleRateIn: number;
   before?: Analysis;
+  /** Average spectrum of the unprocessed track (album tone harmonisation, 10.3). */
+  spectrum?: number[];
   gapAfterSec: number;
+  fadeInSec: number;
+  fadeOutSec: number;
   offsetDb: number;
   state: "analyzing" | "ready" | "rendering" | "error";
   error?: string;
@@ -34,6 +51,7 @@ type SavedAlbum = {
   albumTitle: string;
   common: MasterSettings;
   keep: number;
+  harmonize?: number;
   anchorChoice: string;
   version: number;
   exportRate: number;
@@ -53,6 +71,9 @@ export function AlbumApp({ active }: { active: boolean }) {
   const [tracks, setTracks] = useState<AlbumTrack[]>([]);
   const [common, setCommon] = useState<MasterSettings>(DEFAULT_SETTINGS);
   const [keep, setKeep] = useState(0.5);
+  const [harmonize, setHarmonize] = useState(0.5);
+  const [seqState, setSeqState] = useState<SeqState | null>(null);
+  const seq = useRef<AlbumSequence | null>(null);
   const [anchorChoice, setAnchorChoice] = useState<string>("auto");
   const [version, setVersion] = useState(1);
   const [job, setJob] = useState<string | null>(null);
@@ -82,7 +103,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       return;
     }
     setVersion((v) => v + 1);
-  }, [common, keep, anchorChoice]);
+  }, [common, keep, harmonize, anchorChoice]);
 
   // Restore the previous album once (detailed design 19.4).
   const [restored, setRestored] = useState(false);
@@ -94,6 +115,7 @@ export function AlbumApp({ active }: { active: boolean }) {
         setAlbumTitle(saved.albumTitle);
         setCommon({ ...DEFAULT_SETTINGS, ...saved.common });
         setKeep(saved.keep);
+        setHarmonize(saved.harmonize ?? 0.5);
         setAnchorChoice(saved.anchorChoice);
         setVersion(saved.version);
         setExportRate(saved.exportRate);
@@ -105,6 +127,9 @@ export function AlbumApp({ active }: { active: boolean }) {
           const file = await loadSource(t.id);
           list.push({
             ...t,
+            // Sessions saved before fades existed.
+            fadeInSec: t.fadeInSec ?? 0,
+            fadeOutSec: t.fadeOutSec ?? 0,
             file: file ? new File([file], t.name, { type: file.type }) : new File([], t.name),
             state: file && t.before ? "ready" : "error",
             error: file ? (t.before ? undefined : "解析されていません。削除して追加し直してください") : "音源がブラウザ内に見つかりません（E-SRC-001）",
@@ -124,6 +149,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       albumTitle,
       common,
       keep,
+      harmonize,
       anchorChoice,
       version,
       exportRate,
@@ -133,7 +159,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       tracks: tracks.map(({ file, state: _s, error: _e, ...t }) => ({ ...t, name: file.name })),
     };
     save(value);
-  }, [restored, albumTitle, common, keep, anchorChoice, version, exportRate, exportBits, perTrack, continuous, tracks]);
+  }, [restored, albumTitle, common, keep, harmonize, anchorChoice, version, exportRate, exportBits, perTrack, continuous, tracks]);
 
   const closeAlbum = async () => {
     if (!confirm("アルバムを閉じますか？（保存されている曲と処理結果も消えます）")) return;
@@ -151,7 +177,10 @@ export function AlbumApp({ active }: { active: boolean }) {
     ready.map((t) => ({ id: t.id, l95Before: t.before!.l95, offsetDb: t.offsetDb })),
     anchorChoice,
   );
-  const isStale = (t: AlbumTrack) => !t.result || t.result.version !== version || t.result.offsetDb !== t.offsetDb || t.result.anchor !== (t.id === anchor);
+  // The album tone plan depends on every track, so adding or removing one makes all stale.
+  const planKey = harmonize > 0 ? ready.map((t) => t.id).sort().join(",") : "";
+  const isStale = (t: AlbumTrack) =>
+    !t.result || t.result.version !== version || t.result.offsetDb !== t.offsetDb || t.result.anchor !== (t.id === anchor) || (t.result.planKey ?? "") !== planKey;
   const allDone = tracks.length > 0 && tracks.every((t) => t.before && !isStale(t));
 
   const addFiles = async (list: FileList | File[]) => {
@@ -164,6 +193,8 @@ export function AlbumApp({ active }: { active: boolean }) {
       frames: 0,
       sampleRateIn: 0,
       gapAfterSec: 2,
+      fadeInSec: 0,
+      fadeOutSec: 0,
       offsetDb: 0,
       state: "analyzing",
     }));
@@ -174,7 +205,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       setJob(`解析中 ${i + 1}/${added.length}：${t.title}`);
       try {
         const info = await batch.call("analyzeFile", { file: t.file });
-        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, before: info.analysis, state: "ready" });
+        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, before: info.analysis, spectrum: info.spectrum, state: "ready" });
       } catch (e) {
         update(t.id, { state: "error", error: errorText(e) });
       }
@@ -184,6 +215,7 @@ export function AlbumApp({ active }: { active: boolean }) {
 
   const renderTrack = async (t: AlbumTrack, settings: MasterSettings, label: string) => {
     if (view?.id === t.id) closeView();
+    stopSequence();
     update(t.id, { state: "rendering" });
     const res = await batch.call("renderToStore", { file: t.file, settings, key: t.id }, [], (stage, f) =>
       setJob(`${label}：${STAGE_LABEL[stage] ?? stage}${f > 0 ? ` ${Math.round(f * 100)}%` : ""}`),
@@ -193,27 +225,49 @@ export function AlbumApp({ active }: { active: boolean }) {
 
   // Auto balance (detailed design 10.2 / 10.4): the anchor first, then every other track to its L95 goal.
   const balance = async () => {
-    const list = tracksRef.current.filter((t) => t.before);
+    let list = tracksRef.current.filter((t) => t.before);
     const aId = anchor;
     if (!aId) return;
-    const a = list.find((t) => t.id === aId)!;
     setError(null);
     try {
+      // Tracks saved before spectra were recorded: analyse them again.
+      for (const t of list.filter((x) => !x.spectrum)) {
+        setJob(`解析中：${t.title}`);
+        const info = await batch.call("analyzeFile", { file: t.file });
+        t.spectrum = info.spectrum;
+        update(t.id, { spectrum: info.spectrum });
+      }
+      list = list.map((t) => ({ ...t }));
+      // Album tone plan (detailed design 10.3).
+      const tone = new Map<string, number[]>();
+      if (harmonize > 0 && list.length > 1) {
+        const P = list[0].spectrum!.length;
+        const flat = new Float32Array(list.length * P);
+        list.forEach((t, i) => flat.set(t.spectrum!, i * P));
+        const plan = await viewer.call("albumTonePlan", { spectra: flat, toneMatch: common.toneMatch, amount: harmonize });
+        list.forEach((t, i) => tone.set(t.id, Array.from(plan.subarray(i * P, (i + 1) * P))));
+      }
+      const toneMax = (id: string) => Math.max(0, ...(tone.get(id) ?? []).map(Math.abs));
+      const a = list.find((t) => t.id === aId)!;
       let anchorAfter = a.result && !isStale(a) ? a.result.after : null;
       const todo = list.filter((t) => isStale(t) || !anchorAfter);
       let n = 0;
       if (!anchorAfter) {
         n++;
-        const res = await renderTrack(a, { ...common, targetLufs: common.targetLufs + a.offsetDb, targetMode: "integrated" }, `${n}/${todo.length} ${a.title}（基準曲）`);
+        const res = await renderTrack(
+          a,
+          { ...common, targetLufs: common.targetLufs + a.offsetDb, targetMode: "integrated", albumTone: tone.get(a.id) },
+          `${n}/${todo.length} ${a.title}（基準曲）`,
+        );
         anchorAfter = res.after;
-        update(a.id, { state: "ready", result: { ...res, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true } });
+        update(a.id, { state: "ready", result: { ...res, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true, planKey, albumToneMaxDb: toneMax(a.id) } });
       }
       for (const t of todo) {
         if (t.id === aId) continue;
         n++;
         const goal = l95Goal({ id: t.id, l95Before: t.before!.l95, offsetDb: t.offsetDb }, { id: a.id, l95Before: a.before!.l95, offsetDb: 0 }, anchorAfter.l95, keep);
-        const res = await renderTrack(t, { ...common, targetLufs: goal, targetMode: "l95" }, `${n}/${todo.length} ${t.title}`);
-        update(t.id, { state: "ready", result: { ...res, version, offsetDb: t.offsetDb, goal, anchor: false } });
+        const res = await renderTrack(t, { ...common, targetLufs: goal, targetMode: "l95", albumTone: tone.get(t.id) }, `${n}/${todo.length} ${t.title}`);
+        update(t.id, { state: "ready", result: { ...res, version, offsetDb: t.offsetDb, goal, anchor: false, planKey, albumToneMaxDb: toneMax(t.id) } });
       }
     } catch (e) {
       setError(errorText(e));
@@ -221,6 +275,21 @@ export function AlbumApp({ active }: { active: boolean }) {
     }
     setJob(null);
   };
+
+  // Continuous playback and transition checks (detailed design 10.5 / 12.6).
+  const stopSequence = () => {
+    seq.current?.stop();
+  };
+  const playAlbum = (index: number, frame: number) => {
+    void player?.pause();
+    const items = tracksRef.current.map((t) => ({ key: t.id, frames: t.frames, gapAfterSec: t.gapAfterSec, fadeInSec: t.fadeInSec, fadeOutSec: t.fadeOutSec }));
+    void seq.current?.close();
+    seq.current = new AlbumSequence(viewer, items, setSeqState);
+    void seq.current.playFrom(index, frame).catch((e) => setError(errorText(e)));
+  };
+  useEffect(() => {
+    if (!active) stopSequence();
+  }, [active]);
 
   const closeView = () => {
     void player?.close();
@@ -230,6 +299,7 @@ export function AlbumApp({ active }: { active: boolean }) {
 
   const openView = async (t: AlbumTrack) => {
     if (!t.before || t.state === "rendering") return;
+    stopSequence();
     setViewBusy(true);
     await player?.close();
     setPlayer(null);
@@ -284,7 +354,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       const res = await batch.call(
         "exportAlbum",
         {
-          tracks: tracks.map((t) => ({ key: t.id, title: t.title, gapAfterSec: t.gapAfterSec })),
+          tracks: tracks.map((t) => ({ key: t.id, title: t.title, gapAfterSec: t.gapAfterSec, fadeInSec: t.fadeInSec, fadeOutSec: t.fadeOutSec })),
           albumTitle,
           sampleRate: exportRate,
           bits: exportBits,
@@ -395,6 +465,16 @@ export function AlbumApp({ active }: { active: boolean }) {
                 </select>
               </label>
               <Slider
+                label="曲どうしの音色をそろえる"
+                hint="アルバム全体の平均的な音色に、各曲を少し寄せる（最大 ±2 dB、4 kHz より上は下げるだけ）"
+                value={Math.round(harmonize * 100)}
+                min={0}
+                max={100}
+                step={10}
+                unit="%"
+                onChange={(v) => setHarmonize(v / 100)}
+              />
+              <Slider
                 label="元の音量差を残す割合"
                 hint="0%：全曲の盛り上がり部を同じ大きさに ／ 100%：元の差をそのまま"
                 value={Math.round(keep * 100)}
@@ -442,6 +522,7 @@ export function AlbumApp({ active }: { active: boolean }) {
                   <th>After LUFS / L95 / TP</th>
                   <th>音量の補正</th>
                   <th>曲間</th>
+                  <th>フェード（入 / 出）</th>
                   <th />
                 </tr>
               </thead>
@@ -489,6 +570,7 @@ export function AlbumApp({ active }: { active: boolean }) {
                     </td>
                     <td className={`num${t.result && isStale(t) ? " stale" : ""}`}>
                       {t.state === "rendering" ? "処理中…" : t.result ? `${fmt(t.result.after.lufs)} / ${fmt(t.result.after.l95)} / ${fmt(t.result.after.truePeak)}` : "—"}
+                      {t.result?.albumToneMaxDb ? <span className="sub"> 音色 ±{t.result.albumToneMaxDb.toFixed(1)}</span> : null}
                     </td>
                     <td>
                       <input
@@ -503,7 +585,7 @@ export function AlbumApp({ active }: { active: boolean }) {
                       />{" "}
                       dB
                     </td>
-                    <td>
+                    <td className="gapcell">
                       {i < tracks.length - 1 ? (
                         <>
                           <input
@@ -517,10 +599,37 @@ export function AlbumApp({ active }: { active: boolean }) {
                             aria-label="次の曲までの間隔（秒）"
                           />{" "}
                           秒
+                          <button onClick={() => playAlbum(i, Math.max(0, t.frames - 10 * 48_000))} disabled={busy || !allDone} title="この曲の最後の 10 秒から、次の曲へのつながりを聴く">
+                            ▶ つなぎ目
+                          </button>
                         </>
                       ) : (
                         "—"
                       )}
+                    </td>
+                    <td className="gapcell">
+                      <input
+                        type="number"
+                        className="small"
+                        min={0}
+                        max={20}
+                        step={0.5}
+                        value={t.fadeInSec}
+                        onChange={(e) => update(t.id, { fadeInSec: Number(e.target.value) })}
+                        aria-label="フェードイン（秒）"
+                      />{" "}
+                      /{" "}
+                      <input
+                        type="number"
+                        className="small"
+                        min={0}
+                        max={20}
+                        step={0.5}
+                        value={t.fadeOutSec}
+                        onChange={(e) => update(t.id, { fadeOutSec: Number(e.target.value) })}
+                        aria-label="フェードアウト（秒）"
+                      />{" "}
+                      秒
                     </td>
                     <td className="actions">
                       <button onClick={() => openView(t)} disabled={!t.before || t.state === "rendering" || viewBusy}>
@@ -535,6 +644,28 @@ export function AlbumApp({ active }: { active: boolean }) {
               </tbody>
             </table>
             <p className="sub">曲順：行をドラッグするか ↑↓ で並べ替えます。音量の補正：この曲だけ大きく（＋）・小さく（−）したいときに使います。変えたら「自動バランス」を押してください。</p>
+          </section>
+
+          <section className="panel">
+            <h2>通して聴く</h2>
+            <div className="playback-row">
+              {seqState?.playing ? (
+                <button onClick={stopSequence}>■ 停止</button>
+              ) : (
+                <button className="primary" onClick={() => playAlbum(0, 0)} disabled={busy || !allDone}>
+                  ▶ 最初から
+                </button>
+              )}
+              <span className="now">
+                {seqState?.playing
+                  ? `${String(seqState.index + 1).padStart(2, "0")} ${tracks[seqState.index]?.title ?? ""}　${seqState.inGap ? "（曲間）" : clock(seqState.position / 48_000)}`
+                  : allDone
+                    ? "タイムラインをクリックすると、その位置から再生します"
+                    : "「自動バランス」で全曲を処理すると、通して聴けます"}
+              </span>
+            </div>
+            <Timeline items={tracks} state={seqState} onSeek={(i, f) => allDone && !busy && playAlbum(i, f)} />
+            <p className="sub">曲間・フェードの変更は、処理し直さずにすぐ反映されます（再生し直してください）。</p>
           </section>
 
           {view && (

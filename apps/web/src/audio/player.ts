@@ -11,14 +11,16 @@ export class Player {
   readonly f32 = new Float32Array(new SharedArrayBuffer(F32_LENGTH * 4));
   readonly before: ChunkPool;
   readonly after: ChunkPool;
-  readonly afterSlots: SlotAllocator;
+  afterSlots: SlotAllocator;
   private ctx: AudioContext | null = null;
 
-  constructor(before: Stereo, after: Stereo) {
+  /** `capacityFrames` reserves room for longer tracks loaded later with `load` (album playback). */
+  constructor(before: Stereo, after: Stereo, capacityFrames = 0) {
     const frames = before.left.length;
-    this.before = createChunkPool(frames);
+    const capacity = Math.max(frames, capacityFrames);
+    this.before = createChunkPool(capacity);
     // Enough spare slots to replace the whole After track after a full render.
-    this.after = createChunkPool(frames, Math.ceil(frames / SLOT_FRAMES) + SPARE_SLOTS);
+    this.after = createChunkPool(capacity, Math.ceil(capacity / SLOT_FRAMES) + SPARE_SLOTS);
     fillPool(this.before, before.left, before.right);
     fillPool(this.after, after.left, after.right);
     this.ctl[Ctl.TOTAL_FRAMES] = frames;
@@ -29,6 +31,20 @@ export class Player {
     this.f32[F32.GAIN_BEFORE] = 1;
     this.f32[F32.GAIN_DELTA] = 1;
     this.afterSlots = new SlotAllocator(this.after, () => Atomics.load(this.ctl, Ctl.EPOCH));
+  }
+
+  /**
+   * Replaces both sources with another track of at most the reserved capacity, keeping the same
+   * AudioContext (a new one may need a user gesture in Safari). Call while paused.
+   */
+  load(before: Stereo, after: Stereo) {
+    const frames = before.left.length;
+    if (frames > this.before.seconds * SLOT_FRAMES) throw new Error("track longer than the player's capacity");
+    fillPool(this.before, before.left, before.right);
+    fillPool(this.after, after.left, after.right);
+    this.afterSlots = new SlotAllocator(this.after, () => Atomics.load(this.ctl, Ctl.EPOCH));
+    Atomics.store(this.ctl, Ctl.TOTAL_FRAMES, frames);
+    Atomics.store(this.ctl, Ctl.SEEK, 0);
   }
 
   get context() {
