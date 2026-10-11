@@ -4,6 +4,7 @@ import { Player } from "../audio/player";
 import { anchorId, initialOrder, l95Goal, titleFromFileName } from "../features/album/plan";
 import { AlbumSequence, type SeqState } from "../features/album/sequence";
 import { TIMELINE_HEIGHT, Timeline, type TimelineItem } from "../features/album/Timeline";
+import { SpectrumAnalyzer } from "../features/meters/SpectrumAnalyzer";
 import { DEFAULT_SETTINGS } from "../features/settings/settings";
 import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
@@ -877,6 +878,7 @@ export function AlbumApp({ active }: { active: boolean }) {
               referenceLufs={timelineView === "after" ? common.targetLufs : null}
               color={timelineView}
             />
+            <SpectrumAnalyzer getAnalyser={() => (seqState?.playing ? (seq.current?.analyser ?? null) : null)} />
             <p className="sub">
               全曲を同じ縦の目盛りで表示しているので、曲どうしの音量差がそのまま見えます。下の帯のオレンジの線は 3 秒ごとのラウドネス（点線は基準曲の目標）。下端をドラッグすると高さを変えられます。曲間・フェードの変更はすぐ反映されます。
             </p>

@@ -68,3 +68,8 @@
 .title-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
 .title-wrap input.title { width: 100%; min-width: 140px; text-overflow: ellipsis; }
 .title-wrap .badge { flex: none; margin-left: 0; }
+.spectrum { display: flex; flex-direction: column; gap: 6px; }
+.spectrum-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.spectrum-head .segmented button { font-size: 12px; padding: 3px 10px; }
+.spectrum canvas { display: block; border-radius: 6px; }
+.spectrum-options { display: flex; flex-wrap: wrap; gap: 8px; }

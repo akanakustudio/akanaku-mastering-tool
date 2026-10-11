@@ -13,6 +13,7 @@ export class Player {
   readonly after: ChunkPool;
   afterSlots: SlotAllocator;
   private ctx: AudioContext | null = null;
+  private analyserNode: AnalyserNode | null = null;
 
   /** `capacityFrames` reserves room for longer tracks loaded later with `load` (album playback). */
   constructor(before: Stereo, after: Stereo, capacityFrames = 0) {
@@ -72,8 +73,19 @@ export class Player {
       outputChannelCount: [2],
       processorOptions,
     });
+    // Spectrum display taps the output (detailed design 12.7); it does not change the sound.
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0;
     node.connect(ctx.destination);
+    node.connect(analyser);
+    this.analyserNode = analyser;
     this.ctx = ctx;
+  }
+
+  /** Analyser on the player's output, available after `start()`. */
+  get analyser() {
+    return this.analyserNode;
   }
 
   play() {
