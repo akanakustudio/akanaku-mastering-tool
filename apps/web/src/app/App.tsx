@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { WorkerClient } from "../orchestrator/workerClient";
 import type { DspMethods } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
+import { PlaybackTest } from "./PlaybackTest";
 import "./App.css";
 
 const STATUS_ICON = { ok: "✓", warn: "!", error: "✗" } as const;
@@ -41,6 +42,7 @@ export function App() {
         </tbody>
       </table>
       {checks.length === 0 && <p>確認しています…</p>}
+      <PlaybackTest />
     </main>
   );
 }
