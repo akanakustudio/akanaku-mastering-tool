@@ -16,7 +16,13 @@ export interface DspMethods {
   init: { params: void; result: { engineVersion: string; simd: boolean } };
   selfTest: { params: void; result: SelfTestResult };
   load: { params: { bytes: ArrayBuffer; name: string }; result: LoadResult };
-  render: { params: { settings: MasterSettings }; result: RenderResult };
+  render: { params: { settings: MasterSettings; cancel?: CancelToken }; result: RenderResult };
+  /** Loads the source into this worker's engine only (for region renders). */
+  loadSource: { params: { bytes: ArrayBuffer; name: string }; result: Record<string, never> };
+  renderRegion: {
+    params: { settings: MasterSettings; start: number; end: number; regionLufsGoal: number; stats: ChainStats; cancel?: CancelToken };
+    result: { left: Float32Array; right: Float32Array; offset: number };
+  };
   exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer } };
   // Album (detailed design 10). Rendered audio is stored in OPFS under album/<key>.f32.
   analyzeFile: { params: { file: File }; result: FileInfo };
@@ -38,10 +44,16 @@ export type ExportAlbumParams = {
   zip: boolean;
 };
 
+/** A render is cancelled when `sab[0]` no longer equals `gen` (detailed design 13.3). */
+export type CancelToken = { sab: Int32Array; gen: number };
+
 /** Mirrors akdsp::master::MasterSettings. */
 export type MasterSettings = {
   cleanup: number; // 0..1
+  toneMatch: number; // 0..1, automatic tone correction
   tone: number; // -1..1
+  multiband: boolean;
+  punch: number; // 0..1
   width: number; // 0..1.5
   monoBelowHz: number;
   targetLufs: number;
@@ -67,7 +79,13 @@ export type RenderReport = {
   truePeakTrimDb: number;
   meanGainReductionDb: number;
   maxGainReductionDb: number;
+  toneCurve: number[];
+  toneFreqs: number[];
+  bandGainReductionDb: [number, number, number];
 };
+
+/** Full-render statistics reused by region renders (akdsp::master::ChainStats). */
+export type ChainStats = { toneDeviation: number[]; bandLevelsDb: number[]; makeupDb: number[]; limiterGainDb: number };
 
 export type StereoData = { left: Float32Array; right: Float32Array };
 /** Peak pyramid: bin size (frames) -> [min, max, rms] per bin. */
@@ -86,6 +104,7 @@ export type LoadResult = {
 export type RenderResult = {
   after: Analysis;
   report: RenderReport;
+  stats?: ChainStats;
   audio: StereoData;
   peaks: { after: Pyramid; diff: Pyramid };
   gainDelta: Float32Array;

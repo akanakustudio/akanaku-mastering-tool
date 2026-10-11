@@ -14,15 +14,7 @@ pub struct Biquad {
 
 impl Biquad {
     fn normalized(b: [f64; 3], a: [f64; 3]) -> Self {
-        Self {
-            b0: b[0] / a[0],
-            b1: b[1] / a[0],
-            b2: b[2] / a[0],
-            a1: a[1] / a[0],
-            a2: a[2] / a[0],
-            z1: 0.0,
-            z2: 0.0,
-        }
+        Self { b0: b[0] / a[0], b1: b[1] / a[0], b2: b[2] / a[0], a1: a[1] / a[0], a2: a[2] / a[0], z1: 0.0, z2: 0.0 }
     }
 
     pub fn high_shelf(sr: f64, freq: f64, gain_db: f64, q: f64) -> Self {
@@ -31,16 +23,8 @@ impl Biquad {
         let (c, alpha) = (libm::cos(w0), libm::sin(w0) / (2.0 * q));
         let sa = 2.0 * libm::sqrt(a) * alpha;
         Self::normalized(
-            [
-                a * ((a + 1.0) + (a - 1.0) * c + sa),
-                -2.0 * a * ((a - 1.0) + (a + 1.0) * c),
-                a * ((a + 1.0) + (a - 1.0) * c - sa),
-            ],
-            [
-                (a + 1.0) - (a - 1.0) * c + sa,
-                2.0 * ((a - 1.0) - (a + 1.0) * c),
-                (a + 1.0) - (a - 1.0) * c - sa,
-            ],
+            [a * ((a + 1.0) + (a - 1.0) * c + sa), -2.0 * a * ((a - 1.0) + (a + 1.0) * c), a * ((a + 1.0) + (a - 1.0) * c - sa)],
+            [(a + 1.0) - (a - 1.0) * c + sa, 2.0 * ((a - 1.0) - (a + 1.0) * c), (a + 1.0) - (a - 1.0) * c - sa],
         )
     }
 
@@ -50,26 +34,21 @@ impl Biquad {
         let (c, alpha) = (libm::cos(w0), libm::sin(w0) / (2.0 * q));
         let sa = 2.0 * libm::sqrt(a) * alpha;
         Self::normalized(
-            [
-                a * ((a + 1.0) - (a - 1.0) * c + sa),
-                2.0 * a * ((a - 1.0) - (a + 1.0) * c),
-                a * ((a + 1.0) - (a - 1.0) * c - sa),
-            ],
-            [
-                (a + 1.0) + (a - 1.0) * c + sa,
-                -2.0 * ((a - 1.0) + (a + 1.0) * c),
-                (a + 1.0) + (a - 1.0) * c - sa,
-            ],
+            [a * ((a + 1.0) - (a - 1.0) * c + sa), 2.0 * a * ((a - 1.0) - (a + 1.0) * c), a * ((a + 1.0) - (a - 1.0) * c - sa)],
+            [(a + 1.0) + (a - 1.0) * c + sa, -2.0 * ((a - 1.0) + (a + 1.0) * c), (a + 1.0) + (a - 1.0) * c - sa],
         )
+    }
+
+    pub fn low_pass(sr: f64, freq: f64, q: f64) -> Self {
+        let w0 = 2.0 * PI * freq / sr;
+        let (c, alpha) = (libm::cos(w0), libm::sin(w0) / (2.0 * q));
+        Self::normalized([(1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0], [1.0 + alpha, -2.0 * c, 1.0 - alpha])
     }
 
     pub fn high_pass(sr: f64, freq: f64, q: f64) -> Self {
         let w0 = 2.0 * PI * freq / sr;
         let (c, alpha) = (libm::cos(w0), libm::sin(w0) / (2.0 * q));
-        Self::normalized(
-            [(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0],
-            [1.0 + alpha, -2.0 * c, 1.0 - alpha],
-        )
+        Self::normalized([(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0], [1.0 + alpha, -2.0 * c, 1.0 - alpha])
     }
 
     #[inline]

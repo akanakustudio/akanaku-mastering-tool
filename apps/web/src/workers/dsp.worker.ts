@@ -3,7 +3,7 @@
 import { Zip, ZipPassThrough } from "fflate";
 import init, { Engine, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
 import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
-import type { Analysis, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
+import type { Analysis, CancelToken, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
 import { cueSheet, dataChunk, pcmHeader, safeFileName } from "./wav";
 
 /** Peak pyramid levels sent to the waveform view (detailed design 11.1). */
@@ -15,6 +15,11 @@ let currentId = 0;
 
 const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessage(msg, { transfer });
 const progress = (stage: string, fraction: number) => post({ kind: "progress", id: currentId, stage, fraction });
+/** Progress callback for the engine; returning false cancels the render. */
+const progressUnless = (cancel?: CancelToken) => (stage: string, fraction: number) => {
+  progress(stage, fraction);
+  return !cancel || Atomics.load(cancel.sab, 0) === cancel.gen;
+};
 
 function pyramid(which: string): Pyramid {
   const out: Pyramid = {};
@@ -53,9 +58,23 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     return { result, transfer: [audio.left.buffer, audio.right.buffer, ...buffers(peaks)] };
   },
 
-  async render({ settings }) {
+  async loadSource({ bytes, name }) {
+    await handlers.init();
+    engine?.free();
+    engine = new Engine();
+    engine.load(new Uint8Array(bytes), extOf(name));
+    return { result: {} };
+  },
+
+  async renderRegion({ settings, start, end, regionLufsGoal, stats, cancel }) {
     if (!engine) throw new Error("音源が読み込まれていません");
-    const info = engine.render(settings, progress);
+    const r = engine.render_region(settings, start, end, regionLufsGoal, stats, progressUnless(cancel));
+    return { result: r, transfer: [r.left.buffer, r.right.buffer] };
+  },
+
+  async render({ settings, cancel }) {
+    if (!engine) throw new Error("音源が読み込まれていません");
+    const info = engine.render(settings, progressUnless(cancel));
     progress("display", 0);
     const audio = { left: engine.channel("after", 0), right: engine.channel("after", 1) };
     const peaks = { after: pyramid("after"), diff: pyramid("diff") };
@@ -75,7 +94,7 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     const e = new Engine();
     try {
       e.load(new Uint8Array(await file.arrayBuffer()), extOf(file.name));
-      const info = e.render(settings, progress);
+      const info = e.render(settings, progressUnless());
       progress("store", 0);
       await writeStereo(`album/${key}.f32`, e.channel("after", 0), e.channel("after", 1));
       return { result: { after: info.after, report: info.report } };
@@ -93,7 +112,7 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     const gainDelta = engine!.gain_delta();
     const render: RenderResult = {
       after,
-      report: { appliedGainDb: 0, iterations: 0, truePeakTrimDb: 0, meanGainReductionDb: 0, maxGainReductionDb: 0 },
+      report: { appliedGainDb: 0, iterations: 0, truePeakTrimDb: 0, meanGainReductionDb: 0, maxGainReductionDb: 0, toneCurve: [], toneFreqs: [], bandGainReductionDb: [0, 0, 0] },
       audio,
       peaks,
       gainDelta,
@@ -241,7 +260,7 @@ self.addEventListener("message", async (ev: MessageEvent<Req>) => {
     post({ kind: "res", id, ok: true, result }, transfer);
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    const code = /^E-[A-Z]+-\d+/.exec(message)?.[0] ?? "E-RND-001";
+    const code = /^E-[A-Z]+(-\d+)?/.exec(message)?.[0] ?? "E-RND-001";
     post({ kind: "res", id, ok: false, error: { code, message } });
   }
 });

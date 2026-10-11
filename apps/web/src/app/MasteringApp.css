@@ -45,3 +45,10 @@
 .meters th[scope="row"] { text-align: left; font-weight: 400; color: var(--text-muted); }
 .meters td { font-family: var(--font-num); }
 .shortcuts { color: var(--text-muted); font-size: 12px; margin: 0; }
+.field input[type="checkbox"] { accent-color: var(--accent); }
+.tone-curve svg { background: var(--surface-2); border-radius: 6px; }
+.tone-curve .grid { stroke: var(--border); stroke-width: 1; }
+.tone-curve .grid.zero { stroke: var(--text-muted); stroke-dasharray: 3 3; }
+.tone-curve .axis { fill: var(--text-muted); font-size: 9px; font-family: var(--font-num); }
+.tone-curve .curve { fill: none; stroke: var(--accent); stroke-width: 2; }
+.status.provisional { color: var(--accent); }
