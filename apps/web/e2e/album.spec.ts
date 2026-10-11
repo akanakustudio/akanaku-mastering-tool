@@ -21,6 +21,9 @@ test("album: auto balance and export", async ({ page }) => {
   await expect(rows).toHaveCount(songs.length);
   await expect(page.getByRole("button", { name: /自動バランス/ })).toBeEnabled({ timeout: 120_000 });
 
+  // A 3-second fade-out on the first track (applied at export and playback, no re-render needed).
+  await rows.nth(0).getByRole("spinbutton", { name: "フェードアウト（秒）" }).fill("3");
+
   const t0 = Date.now();
   await page.getByRole("button", { name: /自動バランス/ }).click();
   await expect(page.getByRole("status").filter({ visible: true })).toHaveText("準備完了", { timeout: 600_000 });
@@ -28,13 +31,25 @@ test("album: auto balance and export", async ({ page }) => {
 
   // After L95 of every track; none louder than the anchor's.
   const after = await rows.locator("td:nth-child(5)").allTextContents();
-  const l95 = after.map((s) => Number(s.split("/")[1]));
-  const tp = after.map((s) => Number(s.split("/")[2]));
+  const nums = (s: string) => (s.match(/-?\d+\.\d/g) ?? []).map(Number); // LUFS, L95, TP[, tone]
+  const l95 = after.map((s) => nums(s)[1]);
+  const tp = after.map((s) => nums(s)[2]);
   console.log("after LUFS / L95 / TP:", after.join(" | "));
   const anchorRow = await rows.filter({ hasText: "基準曲" }).locator("td:nth-child(5)").textContent();
-  const anchorL95 = Number(anchorRow!.split("/")[1]);
+  const anchorL95 = nums(anchorRow!)[1];
   for (const v of l95) expect(v).toBeLessThanOrEqual(anchorL95 + 0.5);
   for (const v of tp) expect(v).toBeLessThanOrEqual(-1.0);
+  // Album tone harmonisation (default 50 %) reports how much each track was nudged.
+  await expect(rows.first().locator("td:nth-child(5)")).toContainText("音色 ±");
+
+  // Continuous playback, then the transition from track 1 into track 2.
+  await page.getByRole("button", { name: "▶ 最初から" }).click();
+  await expect(page.locator(".playback-row .now")).toContainText(/^01 .*0:0[1-9]/, { timeout: 15_000 });
+  await page.getByRole("button", { name: "■ 停止" }).click();
+  await rows.nth(0).getByRole("button", { name: "▶ つなぎ目" }).click();
+  await expect(page.locator(".playback-row .now")).toContainText("（曲間）", { timeout: 20_000 });
+  await expect(page.locator(".playback-row .now")).toContainText(/^02 /, { timeout: 10_000 });
+  await page.getByRole("button", { name: "■ 停止" }).click();
 
   // Reload: the album (order, results) is restored from the saved session.
   await page.waitForTimeout(1500); // autosave debounce
@@ -55,6 +70,15 @@ test("album: auto balance and export", async ({ page }) => {
   expect(names.filter((n) => n.endsWith(".wav")).length).toBe(songs.length + 1);
   expect(names.some((n) => n.endsWith(".cue"))).toBe(true);
   expect(new TextDecoder().decode(zip[names.find((n) => n.endsWith(".cue"))!])).toContain("TRACK 03 AUDIO");
+  // The fade-out reaches silence at the end of track 1 (24-bit PCM, last 10 ms).
+  const first = zip[names.find((n) => n.startsWith("01 "))!];
+  const tail = new DataView(first.buffer, first.byteOffset + first.length - 441 * 6, 441 * 6);
+  let peak = 0;
+  for (let i = 0; i < 441 * 2; i++) {
+    const v = tail.getUint8(i * 3) | (tail.getUint8(i * 3 + 1) << 8) | (tail.getInt8(i * 3 + 2) << 16);
+    peak = Math.max(peak, Math.abs(v) / 8388608);
+  }
+  expect(peak).toBeLessThan(1e-3);
 
   expect(errors).toEqual([]);
 });

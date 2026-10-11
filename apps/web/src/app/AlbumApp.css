@@ -32,3 +32,12 @@
 .tracks tr[draggable="true"] { cursor: grab; }
 .tracks tr.dragging-row { opacity: 0.5; }
 .tracks .grip { color: var(--text-muted); margin-right: 2px; letter-spacing: -2px; }
+.timeline { position: relative; height: 34px; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+.timeline .seg { position: absolute; top: 4px; bottom: 4px; padding: 0 4px; border-radius: 4px; font-family: var(--font-num); font-size: 11px; text-align: left; overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface)); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+.timeline .seg.on { background: color-mix(in srgb, var(--accent) 45%, var(--surface)); }
+.timeline .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); pointer-events: none; }
+.playback-row { display: flex; align-items: center; gap: 12px; font-size: 14px; }
+.playback-row .now { color: var(--text-muted); font-family: var(--font-num); }
+.tracks .gapcell { white-space: nowrap; }
+.tracks .gapcell button { padding: 0 6px; margin-left: 4px; }

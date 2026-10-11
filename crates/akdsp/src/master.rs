@@ -23,7 +23,7 @@ pub enum TargetMode {
     L95,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MasterSettings {
     /// Cleanup amount 0..=1 (Cleanup macro).
@@ -43,6 +43,8 @@ pub struct MasterSettings {
     pub target_lufs: f32,
     pub target_mode: TargetMode,
     pub ceiling_dbtp: f32,
+    /// Album tone correction (detailed design 10.3), dB at `eq::POINTS` frequencies; empty = none.
+    pub album_tone: Vec<f32>,
 }
 
 impl Default for MasterSettings {
@@ -59,6 +61,7 @@ impl Default for MasterSettings {
             target_lufs: -14.0,
             target_mode: TargetMode::Integrated,
             ceiling_dbtp: -1.0,
+            album_tone: Vec::new(),
         }
     }
 }
@@ -128,7 +131,7 @@ fn middle(
     deviation_db: &[f32],
     stats: Option<&ChainStats>,
 ) -> (Stereo, [f32; 3], [f32; 3], [f32; 3]) {
-    let (matched, _) = apply_tone_match(x, sr, deviation_db, s.tone_match.clamp(0.0, 1.0));
+    let (matched, _) = apply_tone_match(x, sr, deviation_db, s.tone_match.clamp(0.0, 1.0), &s.album_tone);
     let toned = apply_tone(&matched, sr, s.tone);
     let (dyn_out, levels, makeup, gr) = if s.multiband {
         let levels = stats.map_or_else(|| band_levels(&split_stereo(&toned, sr), sr), |st| st.band_levels_db);
@@ -195,7 +198,8 @@ pub fn render(source: &Stereo, sr: u32, s: &MasterSettings, cache: &mut ChainCac
         cache.cleaned = Some((ck, out, dev));
         cache.pre_limiter = None;
     }
-    let pk = vec![ck, key(s.tone_match), key(s.tone), u32::from(s.multiband), key(s.punch), key(s.width), key(s.mono_below_hz)];
+    let mut pk = vec![ck, key(s.tone_match), key(s.tone), u32::from(s.multiband), key(s.punch), key(s.width), key(s.mono_below_hz)];
+    pk.extend(s.album_tone.iter().map(|v| key(*v)));
     if cache.pre_limiter.as_ref().is_none_or(|(k, ..)| *k != pk) {
         check(progress, "tone", 0.0)?;
         let (_, cleaned, dev) = cache.cleaned.as_ref().unwrap();
@@ -223,7 +227,7 @@ pub fn render(source: &Stereo, sr: u32, s: &MasterSettings, cache: &mut ChainCac
         true_peak_trim_db: trim,
         mean_gain_reduction_db: gr.iter().sum::<f32>() / gr.len().max(1) as f32,
         max_gain_reduction_db: gr.iter().copied().fold(0.0, f32::min),
-        tone_curve: dev.iter().map(|d| d * s.tone_match.clamp(0.0, 1.0)).collect(),
+        tone_curve: eq::total_curve(&dev, s.tone_match.clamp(0.0, 1.0), &s.album_tone),
         tone_freqs: (0..eq::POINTS).map(|k| eq::point_freq(k) as f32).collect(),
         band_gain_reduction_db: *band_gr,
     };

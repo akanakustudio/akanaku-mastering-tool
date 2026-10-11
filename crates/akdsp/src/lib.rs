@@ -4,6 +4,7 @@
 //! golden tests) and for wasm32 via `akdsp-wasm`. Math functions go through
 //! `libm` so native and WASM builds produce the same results (detailed design 5.5).
 
+pub mod album;
 pub mod analysis;
 pub mod buffer;
 pub mod display;
