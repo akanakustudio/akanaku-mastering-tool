@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Mode, SAMPLE_RATE, type ModeValue } from "../audio/layout";
 import { Player } from "../audio/player";
 import { afterSample, beforeSample, renderTestSignal } from "../audio/testSignals";
-import { measureSwitching, swapStress, type SwapResult, type SwitchResult } from "../p0/playbackBench";
+import { measureSwitching, measureTransport, swapStress, type SwapResult, type SwitchResult, type TransportResult } from "../p0/playbackBench";
 
 const SECONDS = 60;
 const LOOP: [number, number] = [5 * SAMPLE_RATE, 15 * SAMPLE_RATE];
@@ -32,6 +32,7 @@ export function PlaybackTest() {
   const [busy, setBusy] = useState<string | null>(null);
   const [switchResult, setSwitchResult] = useState<SwitchResult | null>(null);
   const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
+  const [transportResult, setTransportResult] = useState<TransportResult | null>(null);
   const posRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => () => void player.close(), [player]);
@@ -109,7 +110,18 @@ export function PlaybackTest() {
     setBusy(null);
   };
 
+  const runTransport = async () => {
+    await ensureStarted();
+    setLoop(false);
+    setBusy("再生／停止の計測 0/20");
+    const r = await measureTransport(player, 20, (i) => setBusy(`再生／停止の計測 ${i}/20`));
+    setTransportResult(r);
+    setBusy(null);
+  };
+
   const sw = switchResult;
+  const tr = transportResult;
+  const transportRatio = tr && tr.maxStepSteady > 0 ? tr.maxStepTransport / tr.maxStepSteady : null;
   const clickRatio = sw && sw.maxStepSteady > 0 ? sw.maxStepSwitch / sw.maxStepSteady : null;
 
   return (
@@ -155,6 +167,9 @@ export function PlaybackTest() {
         <button onClick={runSwap} disabled={!!busy}>
           ② 差し替えテスト（1000 回）
         </button>
+        <button onClick={runTransport} disabled={!!busy}>
+          ③ 再生／停止の段差（20 回＋曲の終わり）
+        </button>
         {busy && <span className="busy">{busy}…</span>}
       </div>
 
@@ -188,6 +203,18 @@ export function PlaybackTest() {
               status={swapResult.verifyErrors === 0 && swapResult.verifiedFrames > 0 ? "ok" : "error"}
             />
             <Row label="スロット参照エラー" value={String(swapResult.slotErrors)} status={swapResult.slotErrors === 0 ? "ok" : "error"} />
+          </tbody>
+        </table>
+      )}
+      {tr && (
+        <table>
+          <caption>③ 再生／停止の段差</caption>
+          <tbody>
+            <Row
+              label="再生開始・停止・曲の終わりの段差"
+              value={`フェード中 ${tr.maxStepTransport.toFixed(4)} ／ 通常時 ${tr.maxStepSteady.toFixed(4)}（比 ${transportRatio?.toFixed(2) ?? "-"}、基準 1.1 以下。${tr.cycles} 回＋曲の終わり 1 回）`}
+              status={transportRatio !== null && transportRatio <= 1.1 ? "ok" : "error"}
+            />
           </tbody>
         </table>
       )}

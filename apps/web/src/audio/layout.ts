@@ -11,7 +11,7 @@ export type ModeValue = (typeof Mode)[keyof typeof Mode];
 
 /** Int32 control block. Frame positions fit in int32 for tracks up to ~12 hours at 48 kHz. */
 export const Ctl = {
-  PLAYING: 0,
+  PLAYING: 0, // requested state; the worklet fades out before going silent and clears it at track end
   MODE: 1,
   POSITION: 2, // written by the worklet each quantum
   SEEK: 3, // -1 = no request; the worklet resets it after handling
@@ -36,6 +36,7 @@ export const F32 = {
   GAIN_DELTA: 1,
   MAX_STEP_SWITCH: 2, // largest |y[n] - y[n-1]| during mode crossfades
   MAX_STEP_STEADY: 3, // largest |y[n] - y[n-1]| outside them
+  MAX_STEP_TRANSPORT: 4, // largest |y[n] - y[n-1]| while fading in/out on play, pause and track end
 } as const;
 export const F32_LENGTH = 8;
 

@@ -121,3 +121,37 @@ export async function swapStress(
     seconds: (performance.now() - t0) / 1000,
   };
 }
+
+export type TransportResult = { cycles: number; maxStepTransport: number; maxStepSteady: number };
+
+/**
+ * Starts and stops playback `cycles` times at random positions, then lets the track run into
+ * its end once, and compares the largest output step during those fades with steady playback.
+ */
+export async function measureTransport(player: Player, cycles = 20, onProgress?: (i: number) => void): Promise<TransportResult> {
+  player.pause();
+  player.setLoop(null);
+  await sleep(50);
+  player.f32[F32.MAX_STEP_TRANSPORT] = 0;
+  player.f32[F32.MAX_STEP_STEADY] = 0;
+  for (let i = 0; i < cycles; i++) {
+    player.seek(Math.floor(Math.random() * (player.totalFrames - SAMPLE_RATE)));
+    await sleep(20);
+    player.play();
+    await sleep(150 + Math.random() * 150);
+    player.pause();
+    await sleep(60);
+    onProgress?.(i + 1);
+  }
+  // Run into the end of the track.
+  player.seek(player.totalFrames - SAMPLE_RATE / 2);
+  await sleep(20);
+  player.play();
+  while (player.playing) await sleep(20);
+  await sleep(50);
+  return {
+    cycles,
+    maxStepTransport: player.f32[F32.MAX_STEP_TRANSPORT],
+    maxStepSteady: player.f32[F32.MAX_STEP_STEADY],
+  };
+}
