@@ -1,23 +1,72 @@
 // DSP worker: loads the Rust/WASM engine and runs jobs off the main thread
 // (detailed design 3.1, 18.3).
-import init, { engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
-import type { DspMethods, FromWorker, Req, SelfTestResult } from "./protocol";
+import init, { Engine, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
+import type { DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
+
+/** Peak pyramid levels sent to the waveform view (detailed design 11.1). */
+const PYRAMID_BINS = [256, 1024, 4096, 16384];
 
 let ready: Promise<unknown> | null = null;
+let engine: Engine | null = null;
+let currentId = 0;
 
-const handlers: { [K in keyof DspMethods]: (p: DspMethods[K]["params"]) => Promise<DspMethods[K]["result"]> } = {
+const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessage(msg, { transfer });
+const progress = (stage: string, fraction: number) => post({ kind: "progress", id: currentId, stage, fraction });
+
+function pyramid(which: string): Pyramid {
+  const out: Pyramid = {};
+  for (const bin of PYRAMID_BINS) out[bin] = engine!.peaks(which, bin);
+  return out;
+}
+
+const buffers = (p: Pyramid) => Object.values(p).map((a) => a.buffer);
+
+type Handler<K extends keyof DspMethods> = (p: DspMethods[K]["params"]) => Promise<{ result: DspMethods[K]["result"]; transfer?: Transferable[] }>;
+
+const handlers: { [K in keyof DspMethods]: Handler<K> } = {
   async init() {
     ready ??= init({ module_or_path: new URL("../wasm/pkg/akdsp_wasm_bg.wasm", import.meta.url) });
     await ready;
-    return { engineVersion: engine_version(), simd: simd_enabled() };
+    return { result: { engineVersion: engine_version(), simd: simd_enabled() } };
   },
 
-  async selfTest(): Promise<SelfTestResult> {
+  async selfTest() {
     await handlers.init();
     // 1 s of a full-scale 1 kHz sine: expect RMS -3.01 dBFS, peak 0 dBFS.
     const x = new Float32Array(48_000);
     for (let n = 0; n < x.length; n++) x[n] = Math.sin((2 * Math.PI * 1000 * n) / 48_000);
-    return { rmsDbfs: rms_dbfs(x), peakDbfs: peak_dbfs(x), opfs: await opfsSyncAccessCheck() };
+    const result: SelfTestResult = { rmsDbfs: rms_dbfs(x), peakDbfs: peak_dbfs(x), opfs: await opfsSyncAccessCheck() };
+    return { result };
+  },
+
+  async load({ bytes, name }) {
+    await handlers.init();
+    engine?.free();
+    engine = new Engine();
+    const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : undefined;
+    const info = engine.load(new Uint8Array(bytes), ext);
+    const audio = { left: engine.channel("before", 0), right: engine.channel("before", 1) };
+    const peaks = pyramid("before");
+    const result: LoadResult = { ...info, audio, peaks };
+    return { result, transfer: [audio.left.buffer, audio.right.buffer, ...buffers(peaks)] };
+  },
+
+  async render({ settings }) {
+    if (!engine) throw new Error("音源が読み込まれていません");
+    const info = engine.render(settings, progress);
+    progress("display", 0);
+    const audio = { left: engine.channel("after", 0), right: engine.channel("after", 1) };
+    const peaks = { after: pyramid("after"), diff: pyramid("diff") };
+    const gainDelta = engine.gain_delta();
+    const result: RenderResult = { ...info, audio, peaks, gainDelta };
+    return { result, transfer: [audio.left.buffer, audio.right.buffer, ...buffers(peaks.after), ...buffers(peaks.diff), gainDelta.buffer] };
+  },
+
+  async exportWav({ sampleRate, bits }) {
+    if (!engine) throw new Error("音源が読み込まれていません");
+    progress("encode", 0);
+    const bytes = engine.export_wav(sampleRate, bits);
+    return { result: { bytes: bytes.buffer as ArrayBuffer }, transfer: [bytes.buffer] };
   },
 };
 
@@ -56,15 +105,18 @@ async function opfsSyncAccessCheck(): Promise<{ ok: boolean; detail: string }> {
 
 self.addEventListener("message", async (ev: MessageEvent<Req>) => {
   const { id, method, params } = ev.data;
-  const post = (msg: FromWorker) => self.postMessage(msg);
-  const handler = handlers[method as keyof DspMethods] as ((p: unknown) => Promise<unknown>) | undefined;
+  const handler = handlers[method as keyof DspMethods] as Handler<keyof DspMethods> | undefined;
   if (!handler) {
     post({ kind: "res", id, ok: false, error: { code: "E-RND-001", message: `unknown method: ${method}` } });
     return;
   }
+  currentId = id;
   try {
-    post({ kind: "res", id, ok: true, result: await handler(params) });
+    const { result, transfer } = await handler(params as never);
+    post({ kind: "res", id, ok: true, result }, transfer);
   } catch (e) {
-    post({ kind: "res", id, ok: false, error: { code: "E-RND-001", message: String(e) } });
+    const message = e instanceof Error ? e.message : String(e);
+    const code = /^E-[A-Z]+-\d+/.exec(message)?.[0] ?? "E-RND-001";
+    post({ kind: "res", id, ok: false, error: { code, message } });
   }
 });

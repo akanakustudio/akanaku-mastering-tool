@@ -1,0 +1,10 @@
+.waveform { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.waveform-canvas { position: relative; }
+.waveform-canvas canvas { position: absolute; inset: 0; display: block; }
+.waveform-canvas canvas.overlay { cursor: text; }
+.waveform-busy { position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(135deg, transparent 0 8px, color-mix(in srgb, var(--text) 6%, transparent) 8px 16px); }
+.waveform-footer { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-top: 1px solid var(--border);
+  font-size: 12px; color: var(--text-muted); font-family: var(--font-num); }
+.waveform-footer .zoom { display: flex; gap: 4px; }
+.waveform-footer button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font: inherit; cursor: pointer; }

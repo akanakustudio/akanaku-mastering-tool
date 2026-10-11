@@ -16,3 +16,7 @@ apps/web/src/wasm/pkg/
 # research outputs
 research/out/
 research/.venv/
+
+# Playwright
+apps/web/test-results/
+apps/web/playwright-report/

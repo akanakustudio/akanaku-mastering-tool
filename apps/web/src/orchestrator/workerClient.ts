@@ -1,6 +1,6 @@
 import type { AppError, FromWorker, Req } from "../workers/protocol";
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: AppError) => void };
+type Pending = { resolve: (v: unknown) => void; reject: (e: AppError) => void; onProgress?: (stage: string, fraction: number) => void };
 
 /** Minimal port the client needs; a Worker satisfies it (and so does a test fake). */
 export interface WorkerPort {
@@ -23,15 +23,24 @@ export class WorkerClient<M extends { [K in keyof M]: { params: unknown; result:
     });
   }
 
-  call<K extends keyof M & string>(method: K, params: M[K]["params"], transfer: Transferable[] = []): Promise<M[K]["result"]> {
+  call<K extends keyof M & string>(
+    method: K,
+    params: M[K]["params"],
+    transfer: Transferable[] = [],
+    onProgress?: (stage: string, fraction: number) => void,
+  ): Promise<M[K]["result"]> {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject });
+      this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, onProgress });
       this.port.postMessage({ kind: "req", id, method, params }, transfer);
     });
   }
 
   private onMessage(msg: FromWorker) {
+    if (msg.kind === "progress") {
+      this.pending.get(msg.id)?.onProgress?.(msg.stage, msg.fraction);
+      return;
+    }
     if (msg.kind !== "res") return;
     const p = this.pending.get(msg.id);
     if (!p) return;
