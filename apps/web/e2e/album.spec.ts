@@ -68,6 +68,32 @@ test("album: auto balance and export", async ({ page }) => {
   // Continuous playback, then the transition from track 1 into track 2.
   await page.getByRole("button", { name: "▶ 最初から" }).click();
   await expect(page.locator(".playback-row .now")).toContainText(/^01 .*0:0[1-9]/, { timeout: 15_000 });
+  // Real-time spectrum moves while playing (and settles after stopping).
+  const spectrum = page.locator(".spectrum canvas");
+  await expect(spectrum).toHaveAttribute("data-active", "true", { timeout: 5_000 });
+  // Every display style draws while playing.
+  for (const style of ["ネオン", "サークル", "オーロラ", "クラシック"]) {
+    await page.getByRole("radio", { name: style, exact: true }).click();
+    await page.waitForTimeout(1200);
+    const lit = await spectrum.evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) n++;
+      return n / (d.length / 4);
+    });
+    expect(lit, style).toBeGreaterThan(0.01);
+    if (process.env.AKM_E2E_SHOT) await page.locator(".spectrum").screenshot({ path: `${process.env.AKM_E2E_SHOT}-${test.info().project.name}-spectrum-${style}.png` });
+  }
+  const levels = await page.evaluate(async () => {
+    // Sample the band levels the display uses, for choosing its range.
+    const out: number[] = [];
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      out.push(Number(document.querySelector(".spectrum canvas")?.getAttribute("data-active") === "true"));
+    }
+    return out;
+  });
+  expect(levels.some(Boolean)).toBe(true);
   await page.getByRole("button", { name: "■ 停止" }).click();
   await rows.nth(0).getByRole("button", { name: "▶ つなぎ目" }).click();
   await expect(page.locator(".playback-row .now")).toContainText("（曲間）", { timeout: 20_000 });

@@ -52,7 +52,11 @@ export class AlbumSequence {
     this.timer = setInterval(() => this.tick(gen), 50);
   }
 
-  stop() {
+  get analyser() {
+    return this.player.analyser;
+  }
+
+    stop() {
     this.gen++;
     this.stopped = true;
     this.inGap = false;
