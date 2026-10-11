@@ -1,0 +1,19 @@
+/* Design tokens (detailed design 14.4). Dark is the default theme. */
+:root {
+  --bg: #121417; --surface: #1b1e23; --surface-2: #23272e; --border: #2f343c;
+  --text: #e6e8eb; --text-muted: #9aa1ab;
+  --accent: #3cc8d8; --neutral-wave: #7d8590; --boost: #f2994a; --cut: #4a90e2;
+  --warn: #f2c94c; --danger: #eb5757; --ok: #6fcf97;
+  --font-ui: "Inter", "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, monospace;
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  --bg: #f7f8fa; --surface: #ffffff; --surface-2: #eef0f3; --border: #d6dae0;
+  --text: #1b1e23; --text-muted: #5b636e;
+  --accent: #0e8fa0; --neutral-wave: #8a929c; --boost: #c46a14; --cut: #2a6bc0;
+  --warn: #9a7400; --danger: #c43c3c; --ok: #2f8f5b;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-ui); }
