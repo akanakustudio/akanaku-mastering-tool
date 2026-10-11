@@ -1,6 +1,15 @@
-.album .album-title { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; font-weight: 600; min-width: 200px; }
-.album-top { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 1100px) { .album-top { grid-template-columns: 1fr; } }
+.album .album-title { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; font-weight: 600; min-width: 0; width: min(320px, 100%); }
+/* Album: one column on narrow windows; on wide ones the shared settings become a sticky sidebar. */
+.workspace.album-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.album-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.balance-action { display: flex; flex-direction: column; gap: 6px; }
+.balance-action .primary { width: 100%; }
+@media (min-width: 1280px) {
+  .workspace.album-layout { grid-template-columns: minmax(300px, 340px) minmax(0, 1fr); }
+  /* Keep the main action visible while the settings scroll inside the sidebar. */
+  .album-side .balance-action { position: sticky; bottom: -14px; margin: 0 -16px -14px; padding: 10px 16px 14px; background: var(--surface); border-top: 1px solid var(--border); }
+  .album-side { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow-y: auto; border-radius: 8px; }
+}
 .balance .bars { display: flex; flex-direction: column; gap: 4px; }
 .bar-row { display: grid; grid-template-columns: 24px 1fr 48px; align-items: center; gap: 8px; font-size: 12px; font-family: var(--font-num); }
 .bar-row .track { position: relative; height: 14px; background: var(--surface-2); border-radius: 3px; }
@@ -14,7 +23,7 @@
 .swatch.before { background: var(--neutral-wave); }
 .swatch.after { background: var(--accent); margin-left: 8px; }
 .tracks { width: 100%; border-collapse: collapse; font-size: 14px; }
-.tracks th, .tracks td { padding: 6px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+.tracks th, .tracks td { padding: 6px 5px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 .tracks th { color: var(--text-muted); font-weight: 400; font-size: 12px; }
 .tracks tr.selected { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .tracks .num { font-family: var(--font-num); white-space: nowrap; }
@@ -22,10 +31,11 @@
 .tracks .order { white-space: nowrap; font-family: var(--font-num); }
 .tracks .order button { padding: 0 6px; }
 .tracks .order span { display: inline-block; width: 24px; text-align: center; }
-.tracks input.title { background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 4px; padding: 2px 4px; font: inherit; width: 100%; min-width: 160px; }
+.tracks input.title { background: transparent; color: var(--text); border: 1px solid transparent; border-radius: 4px; padding: 2px 4px; font: inherit; width: 100%; min-width: 140px; }
 .tracks input.title:hover, .tracks input.title:focus { border-color: var(--border); }
-.tracks input.small { width: 60px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; font-family: var(--font-num); }
-.tracks .actions { white-space: nowrap; display: flex; gap: 4px; }
+.tracks input.small { width: 46px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font: inherit; font-family: var(--font-num); }
+.tracks .actions { white-space: nowrap; }
+.tracks .actions button + button { margin-left: 4px; }
 .badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 4px; font-size: 11px; background: color-mix(in srgb, var(--accent) 25%, transparent); }
 .badge.error { background: color-mix(in srgb, var(--danger) 30%, transparent); }
 .export .export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; font-size: 14px; }
@@ -40,7 +50,7 @@
 .playback-row { display: flex; align-items: center; gap: 12px; font-size: 14px; }
 .playback-row .now { color: var(--text-muted); font-family: var(--font-num); }
 .tracks .gapcell { white-space: nowrap; }
-.tracks .gapcell button { padding: 0 6px; margin-left: 4px; }
+.tracks .gapcell button { padding: 0 6px; margin-left: 4px; font-size: 12px; }
 .timeline-wave { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
 .timeline-canvas { position: relative; }
 .timeline-canvas canvas { display: block; }
@@ -51,3 +61,10 @@
 .resize-handle:hover, .resize-handle:focus-visible { background-color: color-mix(in srgb, var(--accent) 15%, transparent); outline: none; }
 .timeline-options { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
 .timeline-options input[type="range"] { width: 120px; accent-color: var(--accent); vertical-align: middle; }
+.tracks { min-width: 880px; }
+.tracks td { white-space: nowrap; }
+.tracks th { white-space: normal; word-break: keep-all; line-height: 1.3; vertical-align: bottom; }
+.tracks .titlecell { white-space: normal; }
+.title-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; }
+.title-wrap input.title { width: 100%; min-width: 140px; text-overflow: ellipsis; }
+.title-wrap .badge { flex: none; margin-left: 0; }

@@ -24,6 +24,8 @@ export type TimelineItem = {
   peaks: number[] | null;
   /** Short-term loudness, 10 Hz. */
   shortTerm: number[] | null;
+  /** Shown as Before because it has not been processed yet (drawn grey). */
+  unprocessed?: boolean;
 };
 
 type Props = {
@@ -91,6 +93,7 @@ export function Timeline(p: Props) {
     ctx.clearRect(0, 0, width, h);
     const { pxPerSec, segs } = layout(p.items, width);
     const color = css(p.color === "after" ? "--accent" : "--neutral-wave");
+    const grey = css("--neutral-wave");
     // Waveform on top; the loudness curves get their own lane below so both stay readable.
     const waveH = p.showLoudness ? Math.round(h * (1 - LOUDNESS_LANE)) : h;
     const laneTop = waveH;
@@ -145,10 +148,10 @@ export function Timeline(p: Props) {
             mx = Math.max(mx, pk[3 * b + 1]);
             sq += pk[3 * b + 2] ** 2;
           }
-          const g = p.showFades ? fadeGain((t0 + t1) / 2, s.len, item.fadeInSec, item.fadeOutSec) : 1;
+          const g = p.showFades && !item.unprocessed ? fadeGain((t0 + t1) / 2, s.len, item.fadeInSec, item.fadeOutSec) : 1;
           cols.push([mn * g, mx * g, Math.sqrt(sq / (b1 - b0)) * g]);
         }
-        ctx.fillStyle = color;
+        ctx.fillStyle = item.unprocessed ? grey : color;
         ctx.globalAlpha = 0.45;
         cols.forEach(([mn, mx], k) => {
           const top = mid - scale(mx);
