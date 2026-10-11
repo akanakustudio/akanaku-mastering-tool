@@ -17,6 +17,7 @@ type PoolView = { slots: Float32Array; table: Int32Array };
 export type PlayerOptions = { ctl: Int32Array; f32: Float32Array; before: PoolView; after: PoolView };
 
 type Seek = "none" | "fadeOut" | "fadeIn";
+type Ramp = "none" | "in" | "out";
 
 class PlayerProcessor extends AudioWorkletProcessor {
   private ctl: Int32Array;
@@ -31,6 +32,13 @@ class PlayerProcessor extends AudioWorkletProcessor {
   // Before/After are the same song, so mode switches use an equal-gain crossfade.
   private readonly modeFade = equalGainTable(MODE_XFADE_FRAMES);
   private readonly shortFade = equalPowerTable(SHORT_FADE_FRAMES);
+  // Fades from/to silence (play, pause, end of track): smooth sin² ramp.
+  private readonly runFade = equalGainTable(SHORT_FADE_FRAMES);
+
+  /** Whether audio is flowing; lags Ctl.PLAYING by the length of the stop fade. */
+  private running = false;
+  private runRamp: Ramp = "none";
+  private runStep = 0;
 
   private seek: Seek = "none";
   private seekTarget = 0;
@@ -79,7 +87,29 @@ class PlayerProcessor extends AudioWorkletProcessor {
     const outR = outputs[0][1];
     const ctl = this.ctl;
 
-    if (Atomics.load(ctl, Ctl.PLAYING) === 0) {
+    const want = Atomics.load(ctl, Ctl.PLAYING) === 1;
+
+    // While silent, seek immediately; there is nothing to fade.
+    if (!this.running) {
+      const seekReq = Atomics.load(ctl, Ctl.SEEK);
+      if (seekReq >= 0) {
+        this.pos = seekReq;
+        Atomics.store(ctl, Ctl.SEEK, -1);
+        Atomics.store(ctl, Ctl.POSITION, this.pos);
+      }
+    }
+
+    // Starting or stopping playback fades in/out instead of cutting the waveform (no click).
+    if (want && (!this.running || this.runRamp === "out")) {
+      this.runStep = this.running ? SHORT_FADE_FRAMES - this.runStep : 0;
+      this.running = true;
+      this.runRamp = "in";
+    } else if (!want && this.running && this.runRamp !== "out") {
+      this.runStep = this.runRamp === "in" ? SHORT_FADE_FRAMES - this.runStep : 0;
+      this.runRamp = "out";
+    }
+
+    if (!this.running) {
       outL.fill(0);
       outR.fill(0);
       Atomics.add(ctl, Ctl.EPOCH, 1);
@@ -117,12 +147,21 @@ class PlayerProcessor extends AudioWorkletProcessor {
     let slotErrors = 0;
     let maxStepSwitch = 0;
     let maxStepSteady = 0;
+    let maxStepTransport = 0;
 
     for (let i = 0; i < outL.length; i++) {
-      if (!looping && this.pos >= total) {
+      if (!this.running || (!looping && this.pos >= total)) {
         outL[i] = outR[i] = 0;
-        Atomics.store(ctl, Ctl.PLAYING, 0);
+        this.running = false;
+        this.runRamp = "none";
         continue;
+      }
+
+      // Fade out over the last frames of the track so playback ends without a click.
+      if (!looping && this.runRamp !== "out" && this.pos >= total - SHORT_FADE_FRAMES) {
+        this.runRamp = "out";
+        this.runStep = SHORT_FADE_FRAMES - (total - this.pos);
+        Atomics.store(ctl, Ctl.PLAYING, 0);
       }
 
       const inXfade = this.xfadeLeft > 0;
@@ -138,7 +177,7 @@ class PlayerProcessor extends AudioWorkletProcessor {
       }
 
       // Verify the raw After samples just read (only while nothing else is fading).
-      const steady = !inXfade && this.seek === "none";
+      const steady = !inXfade && this.seek === "none" && this.runRamp === "none";
       if (verify && steady) {
         if (this.a0 !== afterSample(this.pos, 0, sampleRate) || this.a1 !== afterSample(this.pos, 1, sampleRate)) verifyErrors++;
         verified++;
@@ -181,8 +220,22 @@ class PlayerProcessor extends AudioWorkletProcessor {
 
       if (mono) l = r = 0.5 * (l + r);
 
+      const ramping = this.runRamp !== "none";
+      if (ramping) {
+        const g = this.runRamp === "in" ? this.runFade[this.runStep] : this.runFade[SHORT_FADE_FRAMES - this.runStep];
+        l *= g;
+        r *= g;
+        this.runStep++;
+        if (this.runStep >= SHORT_FADE_FRAMES) {
+          if (this.runRamp === "out") this.running = false;
+          this.runRamp = "none";
+          this.runStep = 0;
+        }
+      }
+
       const step = Math.max(Math.abs(l - this.lastL), Math.abs(r - this.lastR));
-      if (inXfade) maxStepSwitch = Math.max(maxStepSwitch, step);
+      if (ramping) maxStepTransport = Math.max(maxStepTransport, step);
+      else if (inXfade) maxStepSwitch = Math.max(maxStepSwitch, step);
       else if (steady) maxStepSteady = Math.max(maxStepSteady, step);
       this.lastL = l;
       this.lastR = r;
@@ -199,6 +252,7 @@ class PlayerProcessor extends AudioWorkletProcessor {
     // Running maxima; the main thread resets them by writing 0.
     this.f32[F32.MAX_STEP_SWITCH] = Math.max(this.f32[F32.MAX_STEP_SWITCH], maxStepSwitch);
     this.f32[F32.MAX_STEP_STEADY] = Math.max(this.f32[F32.MAX_STEP_STEADY], maxStepSteady);
+    this.f32[F32.MAX_STEP_TRANSPORT] = Math.max(this.f32[F32.MAX_STEP_TRANSPORT], maxStepTransport);
     Atomics.store(ctl, Ctl.POSITION, this.pos);
     Atomics.add(ctl, Ctl.EPOCH, 1);
     return true;

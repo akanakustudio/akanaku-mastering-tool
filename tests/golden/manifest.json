@@ -1,0 +1,165 @@
+{
+  "description": "Golden set for P0/P1 evaluation. Audio lives outside the repo in $AKM_GOLDEN_DIR (detailed design 21.5); only file names are recorded here.",
+  "roles": {
+    "suno": "Full mix exported from Suno as-is (48 kHz / 16-bit). Input for the tool.",
+    "studio_mix": "Full mix exported from Suno Studio after stem edits (48 kHz / 24-bit). Suno output, but not raw.",
+    "studio_multitrack": "Suno Studio multitrack ZIP (48 kHz / 32-bit float). Entry '0 ...' is the full mix, the rest are parts.",
+    "get_stems": "Suno 'Get Stems' ZIP (48 kHz / 16-bit) with per-part MIDI.",
+    "user_mix": "Mixed by the user from stems (48 kHz / 24-bit). Human reference.",
+    "user_master": "Mastered by the user, e.g. in Logic Pro (48 kHz / 24-bit). Human reference / target."
+  },
+  "albums": {
+    "SUMS": "STILL UNDER MY SKIN — earlier songs rebuilt in the world of the new album. Album-balance test set (P2)."
+  },
+  "songs": [
+    {
+      "id": "monokuro-no-hana",
+      "title": "モノクロの花",
+      "album": "SUMS",
+      "files": {
+        "suno": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.wav",
+        "studio_multitrack": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.zip"
+      }
+    },
+    {
+      "id": "yoru-ga-akeru",
+      "title": "夜が明ける",
+      "album": "SUMS",
+      "files": {
+        "studio_multitrack": "0830-2109夜が明ける-SunoStem.zip",
+        "user_mix": "夜が明ける(SUMS)-Mix.wav"
+      }
+    },
+    {
+      "id": "music-traveler",
+      "title": "MUSIC✦TRAVELER",
+      "album": "SUMS",
+      "files": {
+        "suno": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoMaster.wav",
+        "studio_multitrack": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoStem.zip"
+      }
+    },
+    {
+      "id": "akanakuni",
+      "title": "アカナクニ",
+      "album": "SUMS",
+      "files": {
+        "suno": "✦5 アカナクニ (SUMS Ver.)-SunoMaster.wav",
+        "studio_multitrack": "✦5 アカナクニ (SUMS Ver.)-SunoStem.zip"
+      }
+    },
+    {
+      "id": "zanzo-flashback",
+      "title": "残像フラッシュバック",
+      "album": "SUMS",
+      "files": {
+        "suno": "✦5 残像フラッシュバック (SUMS Ver.)-SunoMaster.wav",
+        "studio_multitrack": "✦5 残像フラッシュバック (SUMS Ver.)-SunoStem.zip"
+      }
+    },
+    {
+      "id": "under-my-skin",
+      "title": "アンダーマイスキン",
+      "files": {
+        "studio_multitrack": "✦5 アンダーマイスキン-SunoStem.zip",
+        "user_mix": "アンダーマイスキン-Mix.wav"
+      }
+    },
+    {
+      "id": "yoru-juji-han",
+      "title": "夜十時半",
+      "files": {
+        "studio_multitrack": "✦5 夜十時半-SunoStem.zip",
+        "user_mix": "夜十時半-Mix.wav"
+      }
+    },
+    {
+      "id": "ao-ni-kawaru",
+      "title": "青に変わる",
+      "files": {
+        "studio_multitrack": "✦5 青に変わる-SunoStem.zip",
+        "user_mix": "青に変わる-Mix.wav"
+      }
+    },
+    {
+      "id": "texture",
+      "title": "テクスチャ",
+      "files": {
+        "studio_multitrack": "✦7 テクスチャ-SunoStem.zip",
+        "user_mix": "テクスチャ-Mix.wav"
+      }
+    },
+    {
+      "id": "sanban-tart",
+      "title": "三番タルト",
+      "files": {
+        "studio_multitrack": "✦7 三番タルト-SunoStem.zip",
+        "user_mix": "三番タルト-Mix.wav"
+      }
+    },
+    {
+      "id": "daidai-iro",
+      "title": "橙色",
+      "files": {
+        "studio_multitrack": "✦7 橙色-SunoStem.zip",
+        "user_mix": "橙色-Mix.wav"
+      }
+    },
+    {
+      "id": "shadanki",
+      "title": "遮断機",
+      "files": {
+        "studio_mix": "遮断機-SunoMaster.wav",
+        "studio_multitrack": "✦7 遮断機-SunoStem.zip"
+      }
+    },
+    {
+      "id": "amefuru-mori",
+      "title": "雨降ル森",
+      "files": {
+        "studio_mix": "雨降ル森-SunoMaster.wav",
+        "studio_multitrack": "✦6 雨降ル森-SunoStem.zip"
+      }
+    },
+    {
+      "id": "sabaku-ni-knife",
+      "title": "砂漠にナイフ",
+      "files": {
+        "suno": "✦12 0327-0619 砂漠にナイフ - Single.wav",
+        "get_stems": "✦12 0327-0619 砂漠にナイフ - Single Stems.zip",
+        "user_master": "logicpro_砂漠にナイフ-Master.wav"
+      }
+    },
+    {
+      "id": "shinkokyu-switch",
+      "title": "深呼吸-Switch",
+      "files": {
+        "get_stems": "Master ✦11 0427-2357 深呼吸-Switch - Single Stems.zip",
+        "user_master": "深呼吸-Switch-Master.wav"
+      }
+    },
+    {
+      "id": "emecent",
+      "title": "エメセント",
+      "files": {
+        "get_stems": "✦20 0608-1255エメセント - Master Stems.zip",
+        "user_master": "エメセント-Master-062101.wav"
+      }
+    },
+    {
+      "id": "nijiiro-skip",
+      "title": "にじいろスキップ",
+      "files": {
+        "get_stems": "✦21 0521-2338にじいろスキップ Stems.zip",
+        "user_master": "にじいろスキップ-Master.wav"
+      }
+    },
+    {
+      "id": "bye-bye",
+      "title": "Bye-bye",
+      "files": {
+        "user_master": "Bye-bye-Master.wav"
+      }
+    }
+  ]
+}
