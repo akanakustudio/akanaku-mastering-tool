@@ -41,3 +41,13 @@
 .playback-row .now { color: var(--text-muted); font-family: var(--font-num); }
 .tracks .gapcell { white-space: nowrap; }
 .tracks .gapcell button { padding: 0 6px; margin-left: 4px; }
+.timeline-wave { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.timeline-canvas { position: relative; }
+.timeline-canvas canvas { display: block; }
+.timeline-canvas canvas.playable { cursor: pointer; }
+.timeline-canvas .playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--text); pointer-events: none; }
+.timeline-canvas .seg-outline { position: absolute; top: 0; bottom: 0; border: 1px solid var(--accent); pointer-events: none; }
+.resize-handle { height: 8px; cursor: ns-resize; background: linear-gradient(var(--border), var(--border)) center / 40px 2px no-repeat; touch-action: none; }
+.resize-handle:hover, .resize-handle:focus-visible { background-color: color-mix(in srgb, var(--accent) 15%, transparent); outline: none; }
+.timeline-options { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; font-size: 13px; }
+.timeline-options input[type="range"] { width: 120px; accent-color: var(--accent); vertical-align: middle; }

@@ -68,6 +68,9 @@ fn js_progress(f: &js_sys::Function) -> impl FnMut(&str, f32) -> bool + '_ {
     }
 }
 
+/// Bin size of the album timeline peaks: 0.1 s at 48 kHz.
+const TIMELINE_BIN: usize = 4800;
+
 const CANCELLED: &str = "E-CANCEL: 新しい設定で処理し直すため中断しました";
 
 #[wasm_bindgen]
@@ -241,6 +244,8 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
         analysis: Analysis,
         /// Average spectrum at akdsp::dsp::eq::POINTS (album tone harmonisation, 10.3).
         spectrum: Vec<f32>,
+        /// `[min, max, rms]` per `TIMELINE_BIN` frames, for the album timeline.
+        peaks: Vec<f32>,
     }
     let d = decode(bytes, extension.as_deref()).map_err(|e| JsError::new(&e.to_string()))?;
     let x = if d.sample_rate == INTERNAL_SAMPLE_RATE {
@@ -254,6 +259,7 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
         channels_in: d.channels,
         analysis: analyze(&x, INTERNAL_SAMPLE_RATE),
         spectrum: akdsp::dsp::eq::average_spectrum_db(&x, INTERNAL_SAMPLE_RATE),
+        peaks: display::peaks(&x, TIMELINE_BIN),
     })
 }
 
@@ -272,4 +278,10 @@ pub fn album_tone_plan(spectra: Vec<f32>, tone_match: f32, amount: f32) -> Vec<f
     let n = akdsp::dsp::eq::POINTS;
     let list: Vec<Vec<f32>> = spectra.chunks(n).filter(|c| c.len() == n).map(<[f32]>::to_vec).collect();
     akdsp::album::tone_plan(&list, tone_match, amount).concat()
+}
+
+/// `[min, max, rms]` per 0.1 s of planar 48 kHz audio (album timeline).
+#[wasm_bindgen]
+pub fn timeline_peaks(left: Vec<f32>, right: Vec<f32>) -> Vec<f32> {
+    display::peaks(&Stereo::new(left, right), TIMELINE_BIN)
 }

@@ -27,7 +27,9 @@ export interface DspMethods {
   exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer } };
   // Album (detailed design 10). Rendered audio is stored in OPFS under album/<key>.f32.
   analyzeFile: { params: { file: File }; result: FileInfo };
-  renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport } };
+  renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport; peaks: Float32Array } };
+  /** Timeline peaks of a stored album render (for tracks rendered before peaks were kept). */
+  storedPeaks: { params: { key: string }; result: Float32Array };
   /** `key` is a path under OPFS album/ unless `path` gives the full OPFS path. */
   openStored: { params: { file: File; key: string; path?: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
   exportAlbum: { params: ExportAlbumParams; result: { files: string[]; zip: string | null } };
@@ -40,7 +42,11 @@ export interface DspMethods {
   albumTonePlan: { params: { spectra: Float32Array; toneMatch: number; amount: number }; result: Float32Array };
 }
 
-export type FileInfo = { frames: number; sampleRateIn: number; channelsIn: number; analysis: Analysis; spectrum: number[] };
+/** `peaks`: [min, max, rms] per 0.1 s (TIMELINE_BIN frames), for the album timeline. */
+export type FileInfo = { frames: number; sampleRateIn: number; channelsIn: number; analysis: Analysis; spectrum: number[]; peaks: number[] };
+
+/** Frames per bin of the album timeline peaks (0.1 s). */
+export const TIMELINE_BIN = 4800;
 
 export type ExportAlbumParams = {
   tracks: { key: string; title: string; gapAfterSec: number; fadeInSec: number; fadeOutSec: number }[];
