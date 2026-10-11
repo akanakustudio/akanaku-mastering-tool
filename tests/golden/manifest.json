@@ -6,7 +6,7 @@
     "studio_multitrack": "Suno Studio multitrack ZIP (48 kHz / 32-bit float). Entry '0 ...' is the full mix, the rest are parts.",
     "get_stems": "Suno 'Get Stems' ZIP (48 kHz / 16-bit) with per-part MIDI.",
     "user_mix": "Mixed by the user from stems (48 kHz / 24-bit). Input to the user's mastering; human reference.",
-    "user_master": "Mastered by the user with Logic Pro's Mastering Assistant (48 kHz / 24-bit). Benchmark: the tool's output is compared with it."
+    "user_master": "Mastered with Logic Pro's Mastering Assistant, applying its automatic analysis as-is (48 kHz / 24-bit). Rough reference only — not a target or quality benchmark."
   },
   "albums": {
     "SUMS": {
