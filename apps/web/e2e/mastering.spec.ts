@@ -1,6 +1,6 @@
 // E2E-01 (detailed design 21.4): open a song, master it, A/B, export.
 // Needs a real song: AKM_E2E_SONG=/path/to/song.wav npx playwright test
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 import { statSync } from "node:fs";
 
 const song = process.env.AKM_E2E_SONG;
@@ -43,6 +43,14 @@ test("open → auto master → A/B → export", async ({ page }) => {
   console.log(`[${test.info().project.name}] change → region audible ${regionSec.toFixed(1)} s, full ${((Date.now() - t1) / 1000).toFixed(1)} s`);
   expect(regionSec).toBeLessThan(5);
   await page.getByRole("button", { name: "■ 停止" }).click();
+
+  // Reload: the song, settings and render are restored without rendering again.
+  await page.waitForTimeout(1500); // autosave debounce
+  const t2 = Date.now();
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 120_000 });
+  console.log(`[${test.info().project.name}] restore after reload ${((Date.now() - t2) / 1000).toFixed(1)} s`);
+  await expect(page.getByRole("slider", { name: /自動トーン補正/ })).toHaveValue("90");
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV を書き出す" }).click()]);
   const path = await download.path();

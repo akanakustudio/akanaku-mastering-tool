@@ -6,6 +6,7 @@ import { DEFAULT_SETTINGS } from "../features/settings/settings";
 import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
+import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, storeSource } from "../storage/workspace";
 import type { Analysis, DspMethods, MasterSettings, RenderReport } from "../workers/protocol";
 import "./AlbumApp.css";
 
@@ -27,6 +28,21 @@ type AlbumTrack = {
   result?: Result;
 };
 type View = { id: string; track: TrackData; rendered: RenderData | null };
+
+/** Saved album session (IndexedDB "workspace"/"album"); song files are stored under the track id. */
+type SavedAlbum = {
+  albumTitle: string;
+  common: MasterSettings;
+  keep: number;
+  anchorChoice: string;
+  version: number;
+  exportRate: number;
+  exportBits: 16 | 24;
+  perTrack: boolean;
+  continuous: boolean;
+  tracks: (Omit<AlbumTrack, "file" | "state" | "error"> & { name: string })[];
+};
+const save = autosaver("album");
 
 const fmt = (v: number | undefined, d = 1) => (v === undefined ? "…" : Number.isFinite(v) ? v.toFixed(d) : "-∞");
 const errorText = (e: unknown) => (typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : String(e));
@@ -58,15 +74,76 @@ export function AlbumApp({ active }: { active: boolean }) {
     if (!active) player?.pause();
   }, [active, player]);
 
-  // Any change to the shared settings invalidates every rendered track.
-  const firstCommon = useRef(true);
+  // Any change to the shared settings invalidates every rendered track (not when restoring them).
+  const skipVersionBump = useRef(true);
   useEffect(() => {
-    if (firstCommon.current) {
-      firstCommon.current = false;
+    if (skipVersionBump.current) {
+      skipVersionBump.current = false;
       return;
     }
     setVersion((v) => v + 1);
   }, [common, keep, anchorChoice]);
+
+  // Restore the previous album once (detailed design 19.4).
+  const [restored, setRestored] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      const saved = await loadWorkspace<SavedAlbum>("album");
+      if (saved) {
+        skipVersionBump.current = true;
+        setAlbumTitle(saved.albumTitle);
+        setCommon({ ...DEFAULT_SETTINGS, ...saved.common });
+        setKeep(saved.keep);
+        setAnchorChoice(saved.anchorChoice);
+        setVersion(saved.version);
+        setExportRate(saved.exportRate);
+        setExportBits(saved.exportBits);
+        setPerTrack(saved.perTrack);
+        setContinuous(saved.continuous);
+        const list: AlbumTrack[] = [];
+        for (const t of saved.tracks) {
+          const file = await loadSource(t.id);
+          list.push({
+            ...t,
+            file: file ? new File([file], t.name, { type: file.type }) : new File([], t.name),
+            state: file && t.before ? "ready" : "error",
+            error: file ? (t.before ? undefined : "解析されていません。削除して追加し直してください") : "音源がブラウザ内に見つかりません（E-SRC-001）",
+          });
+        }
+        setTracks(list);
+        if (list.length) setJob(null);
+      }
+      setRestored(true);
+    })();
+  }, []);
+
+  // Autosave (detailed design 13.1).
+  useEffect(() => {
+    if (!restored) return;
+    const value: SavedAlbum = {
+      albumTitle,
+      common,
+      keep,
+      anchorChoice,
+      version,
+      exportRate,
+      exportBits,
+      perTrack,
+      continuous,
+      tracks: tracks.map(({ file, state: _s, error: _e, ...t }) => ({ ...t, name: file.name })),
+    };
+    save(value);
+  }, [restored, albumTitle, common, keep, anchorChoice, version, exportRate, exportBits, perTrack, continuous, tracks]);
+
+  const closeAlbum = async () => {
+    if (!confirm("アルバムを閉じますか？（保存されている曲と処理結果も消えます）")) return;
+    closeView();
+    const ids = tracksRef.current.map((t) => t.id);
+    setTracks([]);
+    await deleteSources(ids);
+    await deleteRendered(ids.map((id) => `album/${id}.f32`));
+    await clearWorkspace("album");
+  };
 
   const update = (id: string, patch: Partial<AlbumTrack>) => setTracks((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   const ready = tracks.filter((t) => t.before);
@@ -92,6 +169,7 @@ export function AlbumApp({ active }: { active: boolean }) {
     }));
     setTracks((ts) => [...ts, ...added]);
     setError(null);
+    for (const t of added) await storeSource(t.id, t.file);
     for (const [i, t] of added.entries()) {
       setJob(`解析中 ${i + 1}/${added.length}：${t.title}`);
       try {
@@ -185,6 +263,8 @@ export function AlbumApp({ active }: { active: boolean }) {
   const remove = (id: string) => {
     if (view?.id === id) closeView();
     setTracks((ts) => ts.filter((t) => t.id !== id));
+    void deleteSources([id]);
+    void deleteRendered([`album/${id}.f32`]);
   };
 
   const exportAlbum = async () => {
@@ -270,6 +350,11 @@ export function AlbumApp({ active }: { active: boolean }) {
           <button onClick={() => fileInput.current?.click()} disabled={busy}>
             曲を追加
           </button>
+          {tracks.length > 0 && (
+            <button onClick={closeAlbum} disabled={busy}>
+              アルバムを閉じる
+            </button>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -290,7 +375,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       {tracks.length === 0 ? (
         <section className="empty">
           <p>アルバムの曲をまとめてドロップしてください（WAV / MP3 / FLAC / AIFF / M4A）。</p>
-          <p className="sub">ファイル名の先頭に番号（例：01、✦12）があれば、その順に並べます。あとで ↑↓ で並べ替えられます。</p>
+          <p className="sub">ファイル名の先頭に番号（例：01、✦12）があれば、その順に並べます。あとで行のドラッグや ↑↓ で並べ替えられます。作業は自動で保存され、次に開いたときに復元されます。</p>
         </section>
       ) : (
         <main className="workspace">

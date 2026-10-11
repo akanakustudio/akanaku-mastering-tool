@@ -5,7 +5,8 @@ import { DEFAULT_SETTINGS, regionLoudness } from "../features/settings/settings"
 import { SettingsControls, ToneCurve } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
-import type { ChainStats, DspMethods, LoadResult, MasterSettings, RenderResult } from "../workers/protocol";
+import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, storeSource } from "../storage/workspace";
+import type { ChainStats, DspMethods, LoadResult, MasterSettings, RenderReport, RenderResult } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
 import "./MasteringApp.css";
 
@@ -30,6 +31,20 @@ const fmt = (v: number, digits = 1) => (Number.isFinite(v) ? v.toFixed(digits) :
 const newWorker = () => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" }));
 const isCancel = (e: unknown) => typeof e === "object" && e !== null && (e as { code?: string }).code === "E-CANCEL";
 
+/** Rendered After is kept here so a restored session opens without rendering again. */
+const SINGLE_AFTER = "single/after.f32";
+
+/** Saved single-track session (IndexedDB "workspace"/"single"). */
+type SavedSingle = {
+  sourceId: string;
+  name: string;
+  settings: MasterSettings;
+  exportRate: number;
+  exportBits: 16 | 24;
+  rendered?: { settingsJson: string; report: RenderReport; stats: ChainStats };
+};
+const save = autosaver("single");
+
 export function MasteringApp({ active = true }: { active?: boolean }) {
   // One worker renders whole tracks, the other quick regions (detailed design 13.3: P0 / P1 jobs).
   const dsp = useMemo(newWorker, []);
@@ -47,6 +62,8 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null);
   // Last full render: its statistics and settings feed region renders.
   const last = useRef<{ stats: ChainStats; settings: MasterSettings; shortTerm: number[] } | null>(null);
+  const [sourceId, setSourceId] = useState<string | null>(null);
+  const [savedRender, setSavedRender] = useState<SavedSingle["rendered"]>(undefined);
 
   useEffect(() => {
     runMainThreadChecks().then(setChecks);
@@ -79,13 +96,14 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
         }
         const label = prev ? "試聴用に再生位置の付近だけ処理済み。全体を処理中" : "マスタリング中";
         setStatus({ kind: prev ? "provisional" : "busy", label: `${label}…` });
-        const res = await dsp.call("render", { settings: s, cancel: token }, [], (stage, f) => {
+        const res = await dsp.call("render", { settings: s, cancel: token, storePath: SINGLE_AFTER }, [], (stage, f) => {
           if (current()) setStatus({ kind: prev ? "provisional" : "busy", label: `${label}：${STAGE_LABEL[stage] ?? stage}${f > 0 ? ` ${Math.round(f * 100)}%` : ""}…` });
         });
         if (!current()) return;
         await p.replaceAfter(res.audio);
         const { audio: _audio, ...rest } = res;
         last.current = { stats: res.stats!, settings: s, shortTerm: res.after.shortTerm };
+        setSavedRender({ settingsJson: JSON.stringify(s), report: res.report, stats: res.stats! });
         setRendered(rest);
         setStatus({ kind: "idle" });
       } catch (e) {
@@ -107,25 +125,97 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
     return () => clearTimeout(t);
   }, [settings, player, track, runRender]);
 
-  const openFile = async (file: File) => {
+  /** Opens a song. With `restore`, reuses the saved settings and (if still valid) the saved render. */
+  const openFile = async (file: File, restore?: SavedSingle) => {
     Atomics.add(cancel, 0, 1); // stop renders of the previous file
-    setStatus({ kind: "busy", label: `${file.name} を読み込み中…` });
+    setStatus({ kind: "busy", label: restore ? "前回の作業を復元中…" : `${file.name} を読み込み中…` });
     try {
+      const id = restore?.sourceId ?? crypto.randomUUID();
+      if (!restore) {
+        await storeSource(id, file);
+        if (sourceId) await deleteSources([sourceId]);
+        await deleteRendered([SINGLE_AFTER]);
+      }
+      const s = restore?.settings ?? settings;
       const bytes = await file.arrayBuffer();
       const copy = bytes.slice(0);
-      const [res] = await Promise.all([dsp.call("load", { bytes, name: file.name }, [bytes]), regionDsp.call("loadSource", { bytes: copy, name: file.name }, [copy])]);
+      await regionDsp.call("loadSource", { bytes: copy, name: file.name }, [copy]);
       await player?.close();
+      last.current = null;
+      setSourceId(id);
+      setSavedRender(undefined);
+      firstRender.current = true;
+
+      const saved = restore?.rendered;
+      if (saved && saved.settingsJson === JSON.stringify(s)) {
+        try {
+          const { load, render } = await dsp.call("openStored", { file, key: "", path: SINGLE_AFTER, ceilingDbtp: s.ceilingDbtp });
+          const p = new Player(load.audio, render.audio);
+          const { audio: _a, ...info } = load;
+          const { audio: _b, ...rest } = render;
+          last.current = { stats: saved.stats, settings: s, shortTerm: render.after.shortTerm };
+          setTrack({ ...info, name: file.name });
+          setRendered({ ...rest, report: saved.report, stats: saved.stats });
+          setSavedRender(saved);
+          setPlayer(p);
+          setStatus({ kind: "idle" });
+          return;
+        } catch {
+          // Saved render missing or unreadable: render again below.
+        }
+      }
+      const res = await dsp.call("load", { bytes, name: file.name }, [bytes]);
       const p = new Player(res.audio, res.audio);
       const { audio: _audio, ...info } = res;
-      last.current = null;
       setTrack({ ...info, name: file.name });
       setRendered(null);
       setPlayer(p);
-      firstRender.current = true;
-      await runRender(settings, p, info.frames);
+      await runRender(s, p, info.frames);
     } catch (e) {
       setStatus({ kind: "error", message: errorText(e) });
     }
+  };
+
+  // Restore the previous session once (detailed design 19.4).
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current) return;
+    restored.current = true;
+    void (async () => {
+      const saved = await loadWorkspace<SavedSingle>("single");
+      if (!saved) return;
+      const file = await loadSource(saved.sourceId);
+      if (!file) {
+        setStatus({ kind: "error", message: "前回の音源がブラウザ内に見つかりません（E-SRC-001）。もう一度ファイルを開いてください" });
+        return;
+      }
+      setSettings(saved.settings);
+      setExportRate(saved.exportRate);
+      setExportBits(saved.exportBits);
+      await openFile(new File([file], saved.name, { type: file.type }), saved);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Autosave (detailed design 13.1).
+  useEffect(() => {
+    if (!track || !sourceId) return;
+    save({ sourceId, name: track.name, settings, exportRate, exportBits, rendered: savedRender } satisfies SavedSingle);
+  }, [track, sourceId, settings, exportRate, exportBits, savedRender]);
+
+  const closeTrack = async () => {
+    if (!confirm("この曲を閉じますか？（保存されている作業も消えます）")) return;
+    Atomics.add(cancel, 0, 1);
+    await player?.close();
+    setPlayer(null);
+    setTrack(null);
+    setRendered(null);
+    last.current = null;
+    if (sourceId) await deleteSources([sourceId]);
+    await deleteRendered([SINGLE_AFTER]);
+    await clearWorkspace("single");
+    setSourceId(null);
+    setStatus({ kind: "idle" });
   };
 
   const exportWav = async () => {
@@ -170,6 +260,11 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
           <button onClick={() => fileInput.current?.click()} disabled={busy}>
             ファイルを開く
           </button>
+          {track && (
+            <button onClick={closeTrack} disabled={busy}>
+              閉じる
+            </button>
+          )}
           <input
             ref={fileInput}
             type="file"
@@ -197,7 +292,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
       {!track ? (
         <section className="empty">
           <p>Suno で書き出した WAV（MP3・FLAC・AIFF・M4A も可）をここにドロップしてください。</p>
-          <p className="sub">読み込むと自動でマスタリングし、処理前と処理後を聴き比べられます。音源はこのブラウザの外には送信されません。</p>
+          <p className="sub">読み込むと自動でマスタリングし、処理前と処理後を聴き比べられます。作業は自動で保存され、次に開いたときに復元されます。音源はこのブラウザの外には送信されません。</p>
           <p className="sub">
             <a href="#p0">P0 検証ページ</a>
           </p>
