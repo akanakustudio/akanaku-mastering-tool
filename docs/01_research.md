@@ -183,6 +183,29 @@
 | Electron + Web UI | エコシステムが成熟 | 重い |
 | JUCE 8（WebView UI 対応） | プロ用オーディオの定番。プラグイン化もしやすい | C++。ML の統合は手間がかかる |
 | Web アプリ（ブラウザ＋サーバー） | 配布が簡単 | 大きな WAV のアップロード、プライバシー、オフラインで使えない |
+| **Web アプリ（ブラウザ内処理）**（2026-10-11 に採用） | 配布が簡単。アップロード不要。サーバー費用がほぼゼロ | ブラウザのメモリ・API の制約。DSP を WASM で自前実装する必要がある |
+
+### 4.6 ブラウザ内で音声処理するための技術（2026年時点）
+
+| 技術 | 用途 | 対応状況・注意点 |
+|---|---|---|
+| WebAssembly ＋ SIMD128 | DSP をネイティブに近い速度で実行 | Chrome / Edge / Safari / Firefox のすべてで使える。Rust（wasm-bindgen）から生成できる |
+| WebAssembly Memory64 | 4GB を超えるメモリ | Chrome / Firefox は対応済み。Safari は対応時期が不確定 → **wasm32（最大 4GB）を前提に設計する** |
+| WebAssembly Threads | WASM 内でのマルチスレッド | SharedArrayBuffer が必要。ブラウザ差やデバッグの難しさがあるため、**Worker を複数立てて曲単位で並列化する方式**を基本にする |
+| SharedArrayBuffer | Worker・AudioWorklet とのデータ共有（コピーしない） | **クロスオリジン分離（COOP: same-origin ／ COEP: require-corp）が必須**。GitHub Pages ではヘッダーを設定できない（coi-serviceworker という回避策はある）。Cloudflare Pages は `_headers` ファイルで設定できる |
+| AudioWorklet | 低レイテンシの再生処理（専用スレッド） | 3ブラウザとも使える。再生開始にはユーザーの操作（クリック等）が必要 |
+| OPFS（Origin Private File System） | ブラウザ内の高速なファイルシステム | 3ブラウザとも使える。Safari の書き込みは Worker 内の `createSyncAccessHandle()` のみ → **書き込みはすべて Worker で行う** |
+| File System Access API（`showSaveFilePicker` 等） | ユーザーが選んだ場所への保存 | Chrome / Edge のみ。Safari・Firefox は非対応 → ダウンロードで代替（複数ファイルは ZIP） |
+| WebCodecs AudioEncoder | AAC 等のエンコード | Chrome / Edge は使える。Safari の AAC エンコード対応は P0 で確認する |
+| `AudioContext.setSinkId` | 出力デバイスの選択 | Chrome / Edge のみ |
+| WebGPU | ML の推論（P4） | 3ブラウザとも使える（Safari は 26 から）。ONNX Runtime Web から利用できる |
+| `navigator.storage.persist()` | ストレージが自動削除されないようにする | 3ブラウザとも使える（許可の条件はブラウザごとに異なる） |
+
+**設計への示唆**
+- 音声ファイルは JS のヒープではなく OPFS と SharedArrayBuffer で扱い、表示中の曲のデータだけをメモリに置く。
+- Rust の DSP クレートは**ネイティブ（テスト・較正用）と WASM（製品用）の両方にビルドする**。三角関数などは `libm` に統一し、両方で同じ結果（ビット単位で一致）が出るようにする。
+- `localhost` はブラウザから安全な環境（secure context）として扱われるため、ローカル実行でも上記の機能はすべて使える。COOP/COEP はローカルサーバーの設定で付ける。
+- 公開する場合は、Cloudflare（Workers の静的アセット配信 ＋ Access。50 ユーザーまで無料）を使うと、COOP/COEP の設定とチーム限定の公開を同時に実現できる。Cloudflare は 2026 年時点で、新規プロジェクトには Pages より Workers を推奨している。
 
 ---
 
@@ -270,3 +293,11 @@ Suno で生成・選曲 → WAV/ステムを書き出し → 取り込み → �
   - [ITO-Master (arXiv)](https://arxiv.org/pdf/2506.16889)
   - [wavesurfer.js Docs / Plugins](https://wavesurfer.xyz/docs/plugins/)
   - [Write 0 lines of C++: Rust + Web GUI audio plugins (Speaker Deck)](https://speakerdeck.com/novonotes/write-0-lines-of-c-plus-plus-building-commercial-audio-plugins-with-rust-and-web-gui)
+- Web プラットフォーム
+  - [The origin private file system (web.dev)](https://web.dev/opfs)
+  - [How to save a file (web.dev)](https://web.dev/articles/files/save-a-file)
+  - [WebKit Bug 231706 (File System Access)](https://bugs.webkit.org/show_bug.cgi?id=231706)
+  - [WebAssembly browser support 2026 (Reintech)](https://reintech.io/blog/webassembly-browser-support-2026-compatibility-guide)
+  - [Enable Wasm threads (SharedArrayBuffer) with COOP/COEP (Cinevva)](https://app.cinevva.com/tutorials/coop-coep-sharedarraybuffer)
+  - [Allow setting COOP and COEP headers in GitHub Pages (GitHub Community)](https://github.com/orgs/community/discussions/13309)
+  - [COOP/COEP headers (Wasmer docs)](https://docs.wasmer.io/sdk/wasmer-js/how-to/coop-coep-headers)
