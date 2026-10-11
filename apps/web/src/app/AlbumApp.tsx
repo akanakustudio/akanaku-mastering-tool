@@ -1,5 +1,5 @@
 // Album screen (S-04 / S-05 MVP; basic design 7, detailed design 10, 16.4, 16.5).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
 import { anchorId, initialOrder, l95Goal, titleFromFileName } from "../features/album/plan";
 import { AlbumSequence, type SeqState } from "../features/album/sequence";
@@ -69,6 +69,9 @@ type SavedAlbum = {
 const save = autosaver("album");
 
 const HEIGHT_KEY = "akmaster.timelineHeight";
+const FULL_KEY = "akmaster.timelineFull";
+/** Margin to the window edges of a full-width panel, px. */
+const BLEED_MARGIN = 16;
 function readNumber(key: string, fallback: number) {
   try {
     const v = Number(localStorage.getItem(key));
@@ -95,6 +98,36 @@ export function AlbumApp({ active }: { active: boolean }) {
   const [timelineHeight, setTimelineHeight] = useState(() => readNumber(HEIGHT_KEY, TIMELINE_HEIGHT.default));
   const [showLoudness, setShowLoudness] = useState(true);
   const [dbScale, setDbScale] = useState(false);
+  const [timelineFull, setTimelineFull] = useState(() => readNumber(FULL_KEY, 0) === 1);
+  // Full width: measure where the panel's column starts and stretch it to the window edges.
+  const playbackPanel = useRef<HTMLElement>(null);
+  const [bleedStyle, setBleedStyle] = useState<React.CSSProperties | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!timelineFull) {
+      setBleedStyle(undefined);
+      return;
+    }
+    const measure = () => {
+      const parent = playbackPanel.current?.parentElement;
+      if (!parent) return;
+      const vw = document.documentElement.clientWidth;
+      const left = parent.getBoundingClientRect().left;
+      setBleedStyle({ marginLeft: BLEED_MARGIN - left, width: vw - 2 * BLEED_MARGIN });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(document.documentElement);
+    return () => ro.disconnect();
+  }, [timelineFull, tracks.length > 0]);
+  const toggleTimelineFull = () =>
+    setTimelineFull((v) => {
+      try {
+        localStorage.setItem(FULL_KEY, v ? "0" : "1"); // per-viewer convenience
+      } catch {
+        // storage unavailable: fine
+      }
+      return !v;
+    });
   const seq = useRef<AlbumSequence | null>(null);
   const [anchorChoice, setAnchorChoice] = useState<string>("auto");
   const [version, setVersion] = useState(1);
@@ -497,8 +530,10 @@ export function AlbumApp({ active }: { active: boolean }) {
         gapAfterSec: t.gapAfterSec,
         fadeInSec: t.fadeInSec,
         fadeOutSec: t.fadeOutSec,
-        peaks: timelineView === "after" ? (t.result?.afterPeaks ?? null) : (t.beforePeaks ?? null),
-        shortTerm: timelineView === "after" ? (t.result?.after.shortTerm ?? null) : (t.before?.shortTerm ?? null),
+        // Until a track is processed, After shows its Before (drawn grey).
+        unprocessed: timelineView === "after" && !t.result?.afterPeaks,
+        peaks: timelineView === "after" ? (t.result?.afterPeaks ?? t.beforePeaks ?? null) : (t.beforePeaks ?? null),
+        shortTerm: timelineView === "after" ? (t.result?.after.shortTerm ?? t.before?.shortTerm ?? null) : (t.before?.shortTerm ?? null),
       })),
     [tracks, timelineView],
   );
@@ -575,8 +610,8 @@ export function AlbumApp({ active }: { active: boolean }) {
           <p className="sub">ファイル名の先頭に番号（例：01、✦12）があれば、その順に並べます。あとで行のドラッグや ↑↓ で並べ替えられます。作業は自動で保存され、次に開いたときに復元されます。</p>
         </section>
       ) : (
-        <main className="workspace">
-          <div className="album-top">
+        <main className="workspace album-layout">
+          <aside className="album-side">
             <section className="panel">
               <h2>アルバム共通の設定</h2>
               <SettingsControls settings={common} onChange={set} loudnessLabel="基準曲の音圧" />
@@ -611,12 +646,15 @@ export function AlbumApp({ active }: { active: boolean }) {
                 unit="%"
                 onChange={(v) => setKeep(v / 100)}
               />
-              <button className="primary" onClick={balance} disabled={busy || ready.length === 0}>
-                {allDone ? "自動バランス（済み）" : "自動バランス（全曲を処理）"}
-              </button>
-              <p className="sub">1 曲あたり 10〜20 秒かかります。設定を変えたら、もう一度押してください（変更のあった曲だけ処理し直します）。</p>
+              <div className="balance-action">
+                <button className="primary" onClick={balance} disabled={busy || ready.length === 0}>
+                  {allDone ? "自動バランス（済み）" : "自動バランス（全曲を処理）"}
+                </button>
+                <p className="sub">1 曲あたり 10〜20 秒かかります。設定を変えたら、もう一度押してください（変更のあった曲だけ処理し直します）。</p>
+              </div>
             </section>
-
+          </aside>
+          <div className="album-main">
             <section className="panel balance">
               <h2>盛り上がり部の音量（L95）</h2>
               <div className="bars">
@@ -635,10 +673,10 @@ export function AlbumApp({ active }: { active: boolean }) {
                 <span className="swatch before" /> Before <span className="swatch after" /> After（-24〜-4 LUFS）
               </p>
             </section>
-          </div>
 
           <section className="panel">
             <h2>曲順・曲間・音量</h2>
+            <div className="table-scroll">
             <table className="tracks">
               <thead>
                 <tr>
@@ -686,9 +724,11 @@ export function AlbumApp({ active }: { active: boolean }) {
                         ↓
                       </button>
                     </td>
-                    <td>
-                      <input className="title" value={t.title} onChange={(e) => update(t.id, { title: e.target.value })} aria-label="曲名" />
-                      {t.id === anchor && <span className="badge">基準曲</span>}
+                    <td className="titlecell">
+                      <div className="title-wrap">
+                        <input className="title" value={t.title} onChange={(e) => update(t.id, { title: e.target.value })} aria-label="曲名" title={t.title} />
+                        {t.id === anchor && <span className="badge">基準曲</span>}
+                      </div>
                       {t.state === "error" && <span className="badge error">{t.error}</span>}
                     </td>
                     <td className="num">{t.frames ? clock(t.frames / 48_000) : "…"}</td>
@@ -770,11 +810,17 @@ export function AlbumApp({ active }: { active: boolean }) {
                 ))}
               </tbody>
             </table>
+            </div>
             <p className="sub">曲順：行をドラッグするか ↑↓ で並べ替えます。音量の補正：この曲だけ大きく（＋）・小さく（−）したいときに使います。変えたら「自動バランス」を押してください。</p>
           </section>
 
-          <section className="panel">
-            <h2>通して聴く</h2>
+          <section className={`panel${timelineFull ? " full-bleed" : ""}`} ref={playbackPanel} style={bleedStyle}>
+            <div className="panel-head">
+              <h2>通して聴く</h2>
+              <button onClick={() => toggleTimelineFull()} aria-pressed={timelineFull} title="ブラウザの横幅いっぱいに表示する／元の幅に戻す">
+                {timelineFull ? "⇥⇤ 通常の幅" : "⇤⇥ 全幅表示"}
+              </button>
+            </div>
             <div className="playback-row">
               {seqState?.playing ? (
                 <button onClick={stopSequence}>■ 停止</button>
@@ -880,6 +926,7 @@ export function AlbumApp({ active }: { active: boolean }) {
             </p>
           </section>
           <ProjectPanel busy={busy} hasWork={allDone || tracks.some((t) => t.before)} onExport={saveProjectFile} onImport={loadProjectFile} />
+          </div>
         </main>
       )}
     </div>

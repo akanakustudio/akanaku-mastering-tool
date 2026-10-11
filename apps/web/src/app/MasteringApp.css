@@ -1,11 +1,11 @@
 .app { min-height: 100vh; }
 .app.dragging { outline: 3px dashed var(--accent); outline-offset: -8px; }
-.app-header { display: flex; align-items: center; gap: 16px; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 2; }
+.app-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px var(--gutter); border-bottom: 1px solid var(--border); background: var(--surface); position: sticky; top: 0; z-index: 2; }
 .app-header h1 { font-size: 18px; margin: 0; white-space: nowrap; }
-.app-header .file { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+.app-header .file { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; flex: 1 1 360px; min-width: 0; }
 .app-header .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-header .hint { color: var(--text-muted); font-size: 14px; }
-.app-header .status { font-size: 13px; color: var(--text-muted); white-space: nowrap; }
+.app-header .status { font-size: 13px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .app-header .status.busy { color: var(--warn); }
 .app-header .status.error { color: var(--danger); white-space: normal; }
 .app button { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font: inherit; font-size: 14px; cursor: pointer; }
@@ -14,10 +14,19 @@
 .banner { margin: 12px 24px 0; padding: 10px 14px; border-radius: 6px; font-size: 14px; }
 .banner.error { background: color-mix(in srgb, var(--danger) 18%, transparent); }
 .banner.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); }
-.empty { max-width: 640px; margin: 18vh auto; text-align: center; padding: 48px 24px; border: 2px dashed var(--border); border-radius: 12px; }
+.empty { max-width: min(640px, calc(100% - 2 * var(--gutter))); margin: 18vh auto; text-align: center; padding: 48px 24px; border: 2px dashed var(--border); border-radius: 12px; }
 .empty .sub, .sub { color: var(--text-muted); font-size: 13px; }
 .empty a { color: var(--accent); }
-.workspace { max-width: 1280px; margin: 0 auto; padding: 16px 24px 32px; display: flex; flex-direction: column; gap: 12px; }
+/* Layout adapts to the window: wider work area on large screens, panels reflow by width. */
+:root { --gutter: clamp(12px, 2vw, 24px); }
+html, body { overflow-x: hidden; }
+.workspace { max-width: 1440px; margin: 0 auto; padding: 16px var(--gutter) 32px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (min-width: 1920px) { .workspace { max-width: min(2200px, 100%); } }
+/* A panel switched to full width spans the whole window; its offset and width are measured in JS. */
+.panel.full-bleed { max-width: none; position: relative; z-index: 1; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.panel-head h2 { margin: 0; }
+.table-scroll { overflow-x: auto; }
 .transport, .view-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 14px; }
 .transport .play { min-width: 96px; font-weight: 600; }
 .transport .time { font-family: var(--font-num); color: var(--text-muted); margin-left: auto; }
@@ -28,8 +37,7 @@
 .segmented button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
 .segmented button:last-child { border-radius: 0 6px 6px 0; }
 .segmented button.on { background: var(--accent); color: #0b1418; border-color: var(--accent); }
-.panels { display: grid; grid-template-columns: 1.2fr 1fr 0.8fr; gap: 12px; }
-@media (max-width: 1100px) { .panels { grid-template-columns: 1fr; } }
+.panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 12px; align-items: start; }
 .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
 .panel h2 { font-size: 15px; margin: 0; }
 .slider { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
@@ -38,6 +46,8 @@
 .slider .hint { color: var(--text-muted); font-size: 12px; }
 .slider input[type="range"] { width: 100%; accent-color: var(--accent); }
 .field { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-size: 14px; }
+.field > span { flex: none; white-space: nowrap; }
+.field select { min-width: 0; max-width: 62%; }
 .field select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font: inherit; }
 .reset { align-self: flex-start; }
 .meters { border-collapse: collapse; font-size: 14px; width: 100%; }
