@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
 import { anchorId, initialOrder, l95Goal, titleFromFileName } from "../features/album/plan";
 import { AlbumSequence, type SeqState } from "../features/album/sequence";
-import { Timeline } from "../features/album/Timeline";
+import { TIMELINE_HEIGHT, Timeline, type TimelineItem } from "../features/album/Timeline";
 import { DEFAULT_SETTINGS } from "../features/settings/settings";
 import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
@@ -28,6 +28,8 @@ type Result = {
   planKey?: string;
   /** Largest album tone correction applied to this track, dB. */
   albumToneMaxDb?: number;
+  /** Timeline peaks of the render: [min, max, rms] per 0.1 s. */
+  afterPeaks?: number[];
 };
 type AlbumTrack = {
   id: string;
@@ -38,6 +40,8 @@ type AlbumTrack = {
   before?: Analysis;
   /** Average spectrum of the unprocessed track (album tone harmonisation, 10.3). */
   spectrum?: number[];
+  /** Timeline peaks of the unprocessed track: [min, max, rms] per 0.1 s. */
+  beforePeaks?: number[];
   gapAfterSec: number;
   fadeInSec: number;
   fadeOutSec: number;
@@ -64,6 +68,18 @@ type SavedAlbum = {
 };
 const save = autosaver("album");
 
+const HEIGHT_KEY = "akmaster.timelineHeight";
+function readNumber(key: string, fallback: number) {
+  try {
+    const v = Number(localStorage.getItem(key));
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  } catch {
+    return fallback;
+  }
+}
+/** Rounds timeline peaks to 4 decimals so the saved session stays small. */
+const compact = (a: ArrayLike<number>) => Array.from(a, (v) => Math.round(v * 1e4) / 1e4);
+
 const fmt = (v: number | undefined, d = 1) => (v === undefined ? "…" : Number.isFinite(v) ? v.toFixed(d) : "-∞");
 const errorText = (e: unknown) => (typeof e === "object" && e && "message" in e ? String((e as { message: unknown }).message) : String(e));
 
@@ -75,6 +91,10 @@ export function AlbumApp({ active }: { active: boolean }) {
   const [keep, setKeep] = useState(0.5);
   const [harmonize, setHarmonize] = useState(0.5);
   const [seqState, setSeqState] = useState<SeqState | null>(null);
+  const [timelineView, setTimelineView] = useState<"after" | "before">("after");
+  const [timelineHeight, setTimelineHeight] = useState(() => readNumber(HEIGHT_KEY, TIMELINE_HEIGHT.default));
+  const [showLoudness, setShowLoudness] = useState(true);
+  const [dbScale, setDbScale] = useState(false);
   const seq = useRef<AlbumSequence | null>(null);
   const [anchorChoice, setAnchorChoice] = useState<string>("auto");
   const [version, setVersion] = useState(1);
@@ -139,6 +159,21 @@ export function AlbumApp({ active }: { active: boolean }) {
         }
         setTracks(list);
         if (list.length) setJob(null);
+        // Sessions saved before timeline peaks were kept: make them in the background.
+        for (const t of list) {
+          try {
+            if (t.result && !t.result.afterPeaks) {
+              const peaks = compact(await batch.call("storedPeaks", { key: t.id }));
+              setTracks((ts) => ts.map((x) => (x.id === t.id && x.result ? { ...x, result: { ...x.result, afterPeaks: peaks } } : x)));
+            }
+            if (t.before && !t.beforePeaks && t.file.size > 0) {
+              const info = await batch.call("analyzeFile", { file: t.file });
+              setTracks((ts) => ts.map((x) => (x.id === t.id ? { ...x, beforePeaks: compact(info.peaks), spectrum: x.spectrum ?? info.spectrum } : x)));
+            }
+          } catch {
+            // Missing render or source: the timeline shows that track empty.
+          }
+        }
       }
       setRestored(true);
     })();
@@ -263,7 +298,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       setJob(`解析中 ${i + 1}/${added.length}：${t.title}`);
       try {
         const info = await batch.call("analyzeFile", { file: t.file });
-        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, before: info.analysis, spectrum: info.spectrum, state: "ready" });
+        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, before: info.analysis, spectrum: info.spectrum, beforePeaks: compact(info.peaks), state: "ready" });
       } catch (e) {
         update(t.id, { state: "error", error: errorText(e) });
       }
@@ -318,14 +353,20 @@ export function AlbumApp({ active }: { active: boolean }) {
           `${n}/${todo.length} ${a.title}（基準曲）`,
         );
         anchorAfter = res.after;
-        update(a.id, { state: "ready", result: { ...res, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true, planKey, albumToneMaxDb: toneMax(a.id) } });
+        update(a.id, {
+          state: "ready",
+          result: { after: res.after, report: res.report, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true, planKey, albumToneMaxDb: toneMax(a.id), afterPeaks: compact(res.peaks) },
+        });
       }
       for (const t of todo) {
         if (t.id === aId) continue;
         n++;
         const goal = l95Goal({ id: t.id, l95Before: t.before!.l95, offsetDb: t.offsetDb }, { id: a.id, l95Before: a.before!.l95, offsetDb: 0 }, anchorAfter.l95, keep);
         const res = await renderTrack(t, { ...common, targetLufs: goal, targetMode: "l95", albumTone: tone.get(t.id) }, `${n}/${todo.length} ${t.title}`);
-        update(t.id, { state: "ready", result: { ...res, version, offsetDb: t.offsetDb, goal, anchor: false, planKey, albumToneMaxDb: toneMax(t.id) } });
+        update(t.id, {
+          state: "ready",
+          result: { after: res.after, report: res.report, version, offsetDb: t.offsetDb, goal, anchor: false, planKey, albumToneMaxDb: toneMax(t.id), afterPeaks: compact(res.peaks) },
+        });
       }
     } catch (e) {
       setError(errorText(e));
@@ -445,6 +486,29 @@ export function AlbumApp({ active }: { active: boolean }) {
       setError(errorText(e));
     }
     setJob(null);
+  };
+
+  const timelineItems = useMemo<TimelineItem[]>(
+    () =>
+      tracks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        frames: t.frames,
+        gapAfterSec: t.gapAfterSec,
+        fadeInSec: t.fadeInSec,
+        fadeOutSec: t.fadeOutSec,
+        peaks: timelineView === "after" ? (t.result?.afterPeaks ?? null) : (t.beforePeaks ?? null),
+        shortTerm: timelineView === "after" ? (t.result?.after.shortTerm ?? null) : (t.before?.shortTerm ?? null),
+      })),
+    [tracks, timelineView],
+  );
+  const changeTimelineHeight = (h: number) => {
+    setTimelineHeight(h);
+    try {
+      localStorage.setItem(HEIGHT_KEY, String(h)); // per-viewer convenience
+    } catch {
+      // storage unavailable: fine
+    }
   };
 
   const totalSec = tracks.reduce((s, t, i) => s + t.frames / 48_000 + (i < tracks.length - 1 ? t.gapAfterSec : 0), 0);
@@ -727,8 +791,49 @@ export function AlbumApp({ active }: { active: boolean }) {
                     : "「自動バランス」で全曲を処理すると、通して聴けます"}
               </span>
             </div>
-            <Timeline items={tracks} state={seqState} onSeek={(i, f) => allDone && !busy && playAlbum(i, f)} />
-            <p className="sub">曲間・フェードの変更は、処理し直さずにすぐ反映されます（再生し直してください）。</p>
+            <div className="timeline-options">
+              <span className="segmented" role="radiogroup" aria-label="タイムラインに表示する音">
+                {(["after", "before"] as const).map((v) => (
+                  <button key={v} role="radio" aria-checked={timelineView === v} className={timelineView === v ? "on" : ""} onClick={() => setTimelineView(v)}>
+                    {v === "after" ? "After（処理後）" : "Before（処理前）"}
+                  </button>
+                ))}
+              </span>
+              <label>
+                <input type="checkbox" checked={showLoudness} onChange={() => setShowLoudness(!showLoudness)} /> ラウドネスの推移（3 秒ごと）
+              </label>
+              <label>
+                <input type="checkbox" checked={dbScale} onChange={() => setDbScale(!dbScale)} /> 縦軸を dB で表示
+              </label>
+              <label>
+                高さ{" "}
+                <input
+                  type="range"
+                  min={TIMELINE_HEIGHT.min}
+                  max={TIMELINE_HEIGHT.max}
+                  step={10}
+                  value={timelineHeight}
+                  onChange={(e) => changeTimelineHeight(Number(e.target.value))}
+                  aria-label="タイムラインの高さ"
+                />
+              </label>
+            </div>
+            <Timeline
+              items={timelineItems}
+              state={seqState}
+              onSeek={(i, f) => allDone && !busy && playAlbum(i, f)}
+              canPlay={allDone && !busy}
+              height={timelineHeight}
+              onHeightChange={changeTimelineHeight}
+              showFades={timelineView === "after"}
+              showLoudness={showLoudness}
+              dbScale={dbScale}
+              referenceLufs={timelineView === "after" ? common.targetLufs : null}
+              color={timelineView}
+            />
+            <p className="sub">
+              全曲を同じ縦の目盛りで表示しているので、曲どうしの音量差がそのまま見えます。下の帯のオレンジの線は 3 秒ごとのラウドネス（点線は基準曲の目標）。下端をドラッグすると高さを変えられます。曲間・フェードの変更はすぐ反映されます。
+            </p>
           </section>
 
           {view && (

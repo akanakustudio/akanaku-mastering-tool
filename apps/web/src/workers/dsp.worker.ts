@@ -2,7 +2,7 @@
 // (detailed design 3.1, 18.3).
 import { Unzip, UnzipPassThrough, Zip, ZipPassThrough } from "fflate";
 import { applyFades } from "../features/album/fade";
-import init, { Engine, album_tone_plan, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
+import init, { Engine, album_tone_plan, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled, timeline_peaks } from "../wasm/pkg/akdsp_wasm.js";
 import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
 import type { Analysis, CancelToken, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
 import { cueSheet, dataChunk, pcmHeader, safeFileName } from "./wav";
@@ -98,8 +98,11 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       e.load(new Uint8Array(await file.arrayBuffer()), extOf(file.name));
       const info = e.render(settings, progressUnless());
       progress("store", 0);
-      await writeStereo(`album/${key}.f32`, e.channel("after", 0), e.channel("after", 1));
-      return { result: { after: info.after, report: info.report } };
+      const left = e.channel("after", 0);
+      const right = e.channel("after", 1);
+      await writeStereo(`album/${key}.f32`, left, right);
+      const peaks = timeline_peaks(left, right);
+      return { result: { after: info.after, report: info.report, peaks }, transfer: [peaks.buffer] };
     } finally {
       e.free();
     }
@@ -344,6 +347,13 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       if (name.startsWith("sources/")) sources.push({ id: name.slice("sources/".length), file: new File(list as BlobPart[], name) });
     }
     return { result: { projectJson, sources, renders } };
+  },
+
+  async storedPeaks({ key }) {
+    await handlers.init();
+    const { left, right } = await readStereo(`album/${key}.f32`);
+    const peaks = timeline_peaks(left, right);
+    return { result: peaks, transfer: [peaks.buffer] };
   },
 
   async readStored({ key }) {

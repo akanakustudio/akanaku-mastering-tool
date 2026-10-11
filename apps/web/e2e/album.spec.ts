@@ -42,6 +42,29 @@ test("album: auto balance and export", async ({ page }) => {
   // Album tone harmonisation (default 50 %) reports how much each track was nudged.
   await expect(rows.first().locator("td:nth-child(5)")).toContainText("音色 ±");
 
+  // Waveform timeline: drawn, height adjustable, Before/After switchable.
+  const timeline = page.locator(".timeline-wave canvas");
+  await expect(timeline).toBeVisible();
+  const inked = () =>
+    timeline.evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let n = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+      return n / (d.length / 4);
+    });
+  expect(await inked()).toBeGreaterThan(0.3);
+  const slider = page.getByRole("slider", { name: "タイムラインの高さ" });
+  await slider.evaluate((el: HTMLInputElement) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, "240");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.locator(".timeline-canvas")).toHaveCSS("height", "240px");
+  if (process.env.AKM_E2E_SHOT) await page.locator(".timeline-wave").screenshot({ path: `${process.env.AKM_E2E_SHOT}-${test.info().project.name}-after.png` });
+  await page.getByRole("radio", { name: "Before（処理前）" }).click();
+  expect(await inked()).toBeGreaterThan(0.3);
+  if (process.env.AKM_E2E_SHOT) await page.locator(".timeline-wave").screenshot({ path: `${process.env.AKM_E2E_SHOT}-${test.info().project.name}-before.png` });
+  await page.getByRole("radio", { name: "After（処理後）" }).click();
+
   // Continuous playback, then the transition from track 1 into track 2.
   await page.getByRole("button", { name: "▶ 最初から" }).click();
   await expect(page.locator(".playback-row .now")).toContainText(/^01 .*0:0[1-9]/, { timeout: 15_000 });
