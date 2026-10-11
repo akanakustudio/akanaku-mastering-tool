@@ -1,6 +1,7 @@
 // E2E-01 (detailed design 21.4): open a song, master it, A/B, export.
 // Needs a real song: AKM_E2E_SONG=/path/to/song.wav npx playwright test
 import { expect, test } from "./fixtures";
+import { unzipSync } from "fflate";
 import { readFileSync, statSync } from "node:fs";
 
 const song = process.env.AKM_E2E_SONG;
@@ -75,9 +76,26 @@ test("open → auto master → A/B → export", async ({ page }) => {
   await page.reload();
   await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 120_000 });
 
-  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV を書き出す" }).click()]);
-  const path = await download.path();
-  expect(statSync(path).size).toBeGreaterThan(1_000_000);
+  // Default: WAV + mastering log in a ZIP (after a restore, so the saved render report is used).
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV＋ログを書き出す" }).click()]);
+  expect(download.suggestedFilename()).toMatch(/\.zip$/);
+  const zip = unzipSync(readFileSync(await download.path()));
+  const wav = Object.keys(zip).find((n) => n.endsWith(".wav"))!;
+  expect(zip[wav].length).toBeGreaterThan(1_000_000);
+  const text = new TextDecoder().decode(zip["mastering-log.txt"]);
+  console.log(text);
+  expect(text).toContain(`元のファイル：${song!.split("/").pop()}`);
+  expect(text).toContain("7. True Peak リミッター");
+  expect(text).toContain(`出力ファイル：${wav}`);
+  const json = JSON.parse(new TextDecoder().decode(zip["mastering-log.json"]));
+  expect(json.tracks[0].source.sha256).toMatch(/^[0-9a-f]{64}$/);
+  expect(json.tracks[0].output.truePeakDbtp).toBeLessThanOrEqual(-1 + 0.05);
+
+  // Without the log: a plain WAV as before.
+  await page.getByLabel(/処理ログを含める/).uncheck();
+  const [plain] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV を書き出す" }).click()]);
+  expect(plain.suggestedFilename()).toMatch(/\.wav$/);
+  expect(statSync(await plain.path()).size).toBeGreaterThan(1_000_000);
 
   expect(errors).toEqual([]);
 });

@@ -216,10 +216,11 @@ impl Engine {
     }
 
     /// Encodes the latest render as WAV.
-    pub fn export_wav(&self, sample_rate: u32, bits: u16) -> Result<Vec<u8>, JsError> {
+    /// Returns `{ bytes: Uint8Array, truePeakDbtp }` (true peak measured on the written file's samples).
+    pub fn export_wav(&self, sample_rate: u32, bits: u16) -> Result<JsValue, JsError> {
         let (after, _, s) = self.after.as_ref().ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
         let enc = encode_wav(after, INTERNAL_SAMPLE_RATE, sample_rate, bits, s.ceiling_dbtp).map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(enc.bytes)
+        encoded_to_js(enc)
     }
 
     fn loudness_match_gain(&self, after: &Analysis) -> f32 {
@@ -265,10 +266,19 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
 
 /// Encodes 48 kHz planar audio as a WAV file (album export).
 #[wasm_bindgen]
-pub fn encode_wav_planar(left: Vec<f32>, right: Vec<f32>, sample_rate: u32, bits: u16, ceiling_dbtp: f32) -> Result<Vec<u8>, JsError> {
+pub fn encode_wav_planar(left: Vec<f32>, right: Vec<f32>, sample_rate: u32, bits: u16, ceiling_dbtp: f32) -> Result<JsValue, JsError> {
     let x = Stereo::new(left, right);
     let enc = encode_wav(&x, INTERNAL_SAMPLE_RATE, sample_rate, bits, ceiling_dbtp).map_err(|e| JsError::new(&e.to_string()))?;
-    Ok(enc.bytes)
+    encoded_to_js(enc)
+}
+
+/// `{ bytes: Uint8Array, truePeakDbtp: number }` for the mastering log.
+fn encoded_to_js(enc: akdsp::io::encode::Encoded) -> Result<JsValue, JsError> {
+    let obj = js_sys::Object::new();
+    let set = |k: &str, v: &JsValue| js_sys::Reflect::set(&obj, &JsValue::from_str(k), v).map_err(|_| JsError::new("result"));
+    set("bytes", &js_sys::Uint8Array::from(&enc.bytes[..]).into())?;
+    set("truePeakDbtp", &JsValue::from_f64(enc.true_peak_dbtp))?;
+    Ok(obj.into())
 }
 
 /// Album tone harmonisation (detailed design 10.3). `spectra` holds each track's spectrum

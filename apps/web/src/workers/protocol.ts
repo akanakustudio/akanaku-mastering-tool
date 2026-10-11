@@ -1,5 +1,7 @@
 // Main thread <-> Worker message protocol (detailed design 18.3).
 
+import type { MasteringLog } from "../features/report/masteringLog";
+
 export type AppError = { code: string; message: string };
 
 export type Req = { kind: "req"; id: number; method: string; params: unknown };
@@ -24,10 +26,10 @@ export interface DspMethods {
     params: { settings: MasterSettings; start: number; end: number; regionLufsGoal: number; stats: ChainStats; cancel?: CancelToken };
     result: { left: Float32Array; right: Float32Array; offset: number };
   };
-  exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer } };
+  exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer; truePeakDbtp: number } };
   // Album (detailed design 10). Rendered audio is stored in OPFS under album/<key>.f32.
   analyzeFile: { params: { file: File }; result: FileInfo };
-  renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport; peaks: Float32Array } };
+  renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport; stats: ChainStats; peaks: Float32Array } };
   /** Timeline peaks of a stored album render (for tracks rendered before peaks were kept). */
   storedPeaks: { params: { key: string }; result: Float32Array };
   /** `key` is a path under OPFS album/ unless `path` gives the full OPFS path. */
@@ -57,6 +59,8 @@ export type ExportAlbumParams = {
   perTrack: boolean;
   continuous: boolean;
   zip: boolean;
+  /** Mastering log; the worker fills in each track's output and writes LOG_TXT / LOG_JSON next to the audio. */
+  log?: MasteringLog;
 };
 
 /** A render is cancelled when `sab[0]` no longer equals `gen` (detailed design 13.3). */

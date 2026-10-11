@@ -2,6 +2,7 @@
 // (detailed design 3.1, 18.3).
 import { Unzip, UnzipPassThrough, Zip, ZipPassThrough } from "fflate";
 import { applyFades } from "../features/album/fade";
+import { LOG_JSON, LOG_TXT, formatLog } from "../features/report/masteringLog";
 import init, { Engine, album_tone_plan, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled, timeline_peaks } from "../wasm/pkg/akdsp_wasm.js";
 import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
 import type { Analysis, CancelToken, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
@@ -102,7 +103,7 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       const right = e.channel("after", 1);
       await writeStereo(`album/${key}.f32`, left, right);
       const peaks = timeline_peaks(left, right);
-      return { result: { after: info.after, report: info.report, peaks }, transfer: [peaks.buffer] };
+      return { result: { after: info.after, report: info.report, stats: info.stats, peaks }, transfer: [peaks.buffer] };
     } finally {
       e.free();
     }
@@ -143,9 +144,12 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
         progress(`export ${i + 1}/${p.tracks.length}`, i / p.tracks.length);
         const { left, right } = await readStereo(`album/${t.key}.f32`);
         applyFades(left, right, t.fadeInSec, t.fadeOutSec, 48_000);
-        const wav = encode_wav_planar(left, right, p.sampleRate, p.bits, p.ceilingDbtp);
+        const enc = encode_wav_planar(left, right, p.sampleRate, p.bits, p.ceilingDbtp) as { bytes: Uint8Array; truePeakDbtp: number };
+        const wav = enc.bytes;
+        const name = `${String(i + 1).padStart(2, "0")} ${safeFileName(t.title)}.wav`;
+        const logged = p.log?.tracks[i];
+        if (logged) logged.output = { fileName: p.perTrack ? name : `${contName}（${i + 1} 曲目）`, truePeakDbtp: enc.truePeakDbtp };
         if (p.perTrack) {
-          const name = `${String(i + 1).padStart(2, "0")} ${safeFileName(t.title)}.wav`;
           const h = await openSync(`export/${name}`);
           h.truncate(0);
           h.write(wav, { at: 0 });
@@ -177,6 +181,12 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
         h.flush();
         h.close();
         files.push(cueName);
+      }
+      if (p.log) {
+        if (cont && p.log.album) p.log.album = { ...p.log.album, continuousFile: contName, cueFile: `${safeFileName(p.albumTitle)}.cue` };
+        await writeText(`export/${LOG_TXT}`, formatLog(p.log));
+        await writeText(`export/${LOG_JSON}`, JSON.stringify(p.log, null, 2));
+        files.push(LOG_TXT, LOG_JSON);
       }
     } finally {
       cont?.close();
@@ -370,10 +380,19 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
   async exportWav({ sampleRate, bits }) {
     if (!engine) throw new Error("音源が読み込まれていません");
     progress("encode", 0);
-    const bytes = engine.export_wav(sampleRate, bits);
-    return { result: { bytes: bytes.buffer as ArrayBuffer }, transfer: [bytes.buffer] };
+    const { bytes, truePeakDbtp } = engine.export_wav(sampleRate, bits) as { bytes: Uint8Array; truePeakDbtp: number };
+    return { result: { bytes: bytes.buffer as ArrayBuffer, truePeakDbtp }, transfer: [bytes.buffer] };
   },
 };
+
+async function writeText(path: string, text: string) {
+  const bytes = new TextEncoder().encode(text);
+  const h = await openSync(path);
+  h.truncate(0);
+  h.write(bytes, { at: 0 });
+  h.flush();
+  h.close();
+}
 
 const extOf = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : undefined);
 
