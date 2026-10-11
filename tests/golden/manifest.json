@@ -5,8 +5,8 @@
     "studio_mix": "Full mix exported from Suno Studio after stem edits (48 kHz / 24-bit). Suno output, but not raw.",
     "studio_multitrack": "Suno Studio multitrack ZIP (48 kHz / 32-bit float). Entry '0 ...' is the full mix, the rest are parts.",
     "get_stems": "Suno 'Get Stems' ZIP (48 kHz / 16-bit) with per-part MIDI.",
-    "user_mix": "Mixed by the user from stems (48 kHz / 24-bit). Human reference.",
-    "user_master": "Mastered by the user, e.g. in Logic Pro (48 kHz / 24-bit). Human reference / target."
+    "user_mix": "Mixed by the user from stems (48 kHz / 24-bit). Input to the user's mastering; human reference.",
+    "user_master": "Mastered by the user with Logic Pro's Mastering Assistant (48 kHz / 24-bit). Benchmark: the tool's output is compared with it."
   },
   "albums": {
     "SUMS": {
@@ -103,7 +103,8 @@
       "albumTitle": "モノクロの花 (SUMS Ver.)",
       "files": {
         "suno": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.wav",
-        "studio_multitrack": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.zip"
+        "studio_multitrack": "0808-1545モノクロの花(SUMS Ver.)-SunoMaster.zip",
+        "user_master": "モノクロの花(SUMS Ver.)-Master.wav"
       }
     },
     {
@@ -112,7 +113,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "0830-2109夜が明ける-SunoStem.zip",
-        "user_mix": "夜が明ける(SUMS)-Mix.wav"
+        "user_mix": "夜が明ける(SUMS)-Mix.wav",
+        "user_master": "夜が明ける(SUMS)-Master.wav"
       }
     },
     {
@@ -122,7 +124,8 @@
       "albumTitle": "ミュージックトラベラー (SUMS Ver.)",
       "files": {
         "suno": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoMaster.wav",
-        "studio_multitrack": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoStem.zip"
+        "studio_multitrack": "✦5 MUSIC✦TRAVELER  (SUMS Ver.)-SunoStem.zip",
+        "user_master": "ミュージックトラベラー-Master.wav"
       }
     },
     {
@@ -132,7 +135,8 @@
       "albumTitle": "アカナクニ (SUMS Ver.)",
       "files": {
         "suno": "✦5 アカナクニ (SUMS Ver.)-SunoMaster.wav",
-        "studio_multitrack": "✦5 アカナクニ (SUMS Ver.)-SunoStem.zip"
+        "studio_multitrack": "✦5 アカナクニ (SUMS Ver.)-SunoStem.zip",
+        "user_master": "アカナクニ-Master.wav"
       }
     },
     {
@@ -142,7 +146,8 @@
       "albumTitle": "残像フラッシュバック (SUMS Ver.)",
       "files": {
         "suno": "✦5 残像フラッシュバック (SUMS Ver.)-SunoMaster.wav",
-        "studio_multitrack": "✦5 残像フラッシュバック (SUMS Ver.)-SunoStem.zip"
+        "studio_multitrack": "✦5 残像フラッシュバック (SUMS Ver.)-SunoStem.zip",
+        "user_master": "残像フラッシュバック-Master.wav"
       }
     },
     {
@@ -151,7 +156,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 アンダーマイスキン-SunoStem.zip",
-        "user_mix": "アンダーマイスキン-Mix.wav"
+        "user_mix": "アンダーマイスキン-Mix.wav",
+        "user_master": "アンダーマイスキン-Master.wav"
       }
     },
     {
@@ -160,7 +166,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 夜十時半-SunoStem.zip",
-        "user_mix": "夜十時半-Mix.wav"
+        "user_mix": "夜十時半-Mix.wav",
+        "user_master": "夜十時半-Master.wav"
       }
     },
     {
@@ -169,7 +176,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦5 青に変わる-SunoStem.zip",
-        "user_mix": "青に変わる-Mix.wav"
+        "user_mix": "青に変わる-Mix.wav",
+        "user_master": "青に変わる-Master.wav"
       }
     },
     {
@@ -178,7 +186,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 テクスチャ-SunoStem.zip",
-        "user_mix": "テクスチャ-Mix.wav"
+        "user_mix": "テクスチャ-Mix.wav",
+        "user_master": "テクスチャ-Master.wav"
       }
     },
     {
@@ -187,7 +196,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 三番タルト-SunoStem.zip",
-        "user_mix": "三番タルト-Mix.wav"
+        "user_mix": "三番タルト-Mix.wav",
+        "user_master": "三番タルト-Master.wav"
       }
     },
     {
@@ -196,7 +206,8 @@
       "album": "SUMS",
       "files": {
         "studio_multitrack": "✦7 橙色-SunoStem.zip",
-        "user_mix": "橙色-Mix.wav"
+        "user_mix": "橙色-Mix.wav",
+        "user_master": "橙色-Master.wav"
       }
     },
     {
@@ -205,7 +216,8 @@
       "album": "SUMS",
       "files": {
         "studio_mix": "遮断機-SunoMaster.wav",
-        "studio_multitrack": "✦7 遮断機-SunoStem.zip"
+        "studio_multitrack": "✦7 遮断機-SunoStem.zip",
+        "user_master": "遮断機-Master.wav"
       }
     },
     {
@@ -214,7 +226,8 @@
       "album": "SUMS",
       "files": {
         "studio_mix": "雨降ル森-SunoMaster.wav",
-        "studio_multitrack": "✦6 雨降ル森-SunoStem.zip"
+        "studio_multitrack": "✦6 雨降ル森-SunoStem.zip",
+        "user_master": "雨降ル森-Master.wav"
       }
     },
     {
