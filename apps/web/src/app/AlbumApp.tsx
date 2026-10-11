@@ -2,14 +2,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
 import { anchorId, initialOrder, l95Goal, titleFromFileName } from "../features/album/plan";
+import { DEFAULT_SETTINGS } from "../features/settings/settings";
+import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
 import type { Analysis, DspMethods, MasterSettings, RenderReport } from "../workers/protocol";
 import "./AlbumApp.css";
 
-const DEFAULT_COMMON: MasterSettings = { cleanup: 0.5, tone: 0, width: 1, monoBelowHz: 120, targetLufs: -14, ceilingDbtp: -1 };
 const AUDIO_EXT = /\.(wav|wave|aif|aiff|flac|mp3|m4a|mp4|aac|caf)$/i;
-const STAGE_LABEL: Record<string, string> = { cleanup: "ノイズ除去", tone: "音色・ステレオ", limiter: "音圧調整", verify: "ピークの確認", store: "保存", zip: "ZIP の作成" };
+const STAGE_LABEL: Record<string, string> = { cleanup: "ノイズ除去", tone: "音色・コンプ・ステレオ", limiter: "音圧調整", verify: "ピークの確認", store: "保存", zip: "ZIP の作成" };
 
 type Result = { after: Analysis; report: RenderReport; version: number; offsetDb: number; goal: number; anchor: boolean };
 type AlbumTrack = {
@@ -34,7 +35,7 @@ export function AlbumApp({ active }: { active: boolean }) {
   const batch = useMemo(() => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" })), []);
   const viewer = useMemo(() => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" })), []);
   const [tracks, setTracks] = useState<AlbumTrack[]>([]);
-  const [common, setCommon] = useState<MasterSettings>(DEFAULT_COMMON);
+  const [common, setCommon] = useState<MasterSettings>(DEFAULT_SETTINGS);
   const [keep, setKeep] = useState(0.5);
   const [anchorChoice, setAnchorChoice] = useState<string>("auto");
   const [version, setVersion] = useState(1);
@@ -296,18 +297,7 @@ export function AlbumApp({ active }: { active: boolean }) {
           <div className="album-top">
             <section className="panel">
               <h2>アルバム共通の設定</h2>
-              <Slider label="ノイズ除去（Cleanup）" value={Math.round(common.cleanup * 100)} min={0} max={100} step={5} unit="%" onChange={(v) => set({ cleanup: v / 100 })} />
-              <Slider label="音色（Warm ⇔ Bright）" value={Math.round(common.tone * 100)} min={-100} max={100} step={5} unit="" onChange={(v) => set({ tone: v / 100 })} />
-              <Slider label="ステレオの広がり" value={Math.round(common.width * 100)} min={0} max={150} step={5} unit="%" onChange={(v) => set({ width: v / 100 })} />
-              <label className="field">
-                <span>基準曲の音圧</span>
-                <select value={common.targetLufs} onChange={(e) => set({ targetLufs: Number(e.target.value) })}>
-                  <option value={-14}>Streaming（-14 LUFS）</option>
-                  <option value={-16}>Apple Music（-16 LUFS）</option>
-                  <option value={-10}>Loud（-10 LUFS）</option>
-                  <option value={-17}>Dynamic（-17 LUFS）</option>
-                </select>
-              </label>
+              <SettingsControls settings={common} onChange={set} loudnessLabel="基準曲の音圧" />
               <label className="field">
                 <span>基準曲</span>
                 <select value={anchorChoice} onChange={(e) => setAnchorChoice(e.target.value)}>
@@ -508,22 +498,5 @@ export function AlbumApp({ active }: { active: boolean }) {
         </main>
       )}
     </div>
-  );
-}
-
-function Slider(p: { label: string; hint?: string; value: number; min: number; max: number; step: number; unit: string; onChange: (v: number) => void }) {
-  return (
-    <label className="slider">
-      <span className="label">
-        {p.label}
-        <span className="value">
-          {p.value > 0 && p.min < 0 ? "+" : ""}
-          {p.value}
-          {p.unit}
-        </span>
-      </span>
-      <input type="range" min={p.min} max={p.max} step={p.step} value={p.value} onChange={(e) => p.onChange(Number(e.target.value))} />
-      {p.hint && <span className="hint">{p.hint}</span>}
-    </label>
   );
 }

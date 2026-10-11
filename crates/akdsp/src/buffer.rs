@@ -13,10 +13,7 @@ impl Stereo {
     }
 
     pub fn zeros(frames: usize) -> Self {
-        Self {
-            l: vec![0.0; frames],
-            r: vec![0.0; frames],
-        }
+        Self { l: vec![0.0; frames], r: vec![0.0; frames] }
     }
 
     pub fn len(&self) -> usize {
@@ -28,17 +25,11 @@ impl Stereo {
     }
 
     pub fn scaled(&self, gain: f32) -> Self {
-        Self {
-            l: self.l.iter().map(|s| s * gain).collect(),
-            r: self.r.iter().map(|s| s * gain).collect(),
-        }
+        Self { l: self.l.iter().map(|s| s * gain).collect(), r: self.r.iter().map(|s| s * gain).collect() }
     }
 
     pub fn scale(&mut self, gain: f32) {
-        self.l
-            .iter_mut()
-            .chain(self.r.iter_mut())
-            .for_each(|s| *s *= gain);
+        self.l.iter_mut().chain(self.r.iter_mut()).for_each(|s| *s *= gain);
     }
 
     pub fn channels(&self) -> [&[f32]; 2] {

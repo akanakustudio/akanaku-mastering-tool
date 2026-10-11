@@ -1,6 +1,6 @@
 // Main-thread controller for the player worklet (detailed design 12).
 import workletUrl from "./player.worklet.ts?worker&url";
-import { CTL_LENGTH, Ctl, F32, F32_LENGTH, Mode, SAMPLE_RATE, SLOT_FRAMES, SPARE_SLOTS, createChunkPool, fillPool, type ChunkPool, type ModeValue } from "./layout";
+import { CTL_LENGTH, Ctl, F32, F32_LENGTH, Mode, SAMPLE_RATE, SLOT_FRAMES, SPARE_SLOTS, createChunkPool, fillPool, slotOffset, type ChunkPool, type ModeValue } from "./layout";
 import type { PlayerOptions } from "./player.worklet";
 import { SlotAllocator } from "./slotAllocator";
 
@@ -118,6 +118,36 @@ export class Player {
         }
       };
       while (!this.afterSlots.replace(sec, write)) await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  /**
+   * Splices a region render into After (detailed design 4.5 / 12.5): the region covers
+   * `[offset, offset + left.length)`; its first and last `fade` frames crossfade with the
+   * current audio using an equal-gain curve (old and new renders are strongly correlated).
+   */
+  async spliceAfter(offset: number, left: Float32Array, right: Float32Array, fade = 240) {
+    const len = left.length;
+    const firstSec = Math.floor(offset / SLOT_FRAMES);
+    const lastSec = Math.min(this.after.seconds - 1, Math.floor((offset + len - 1) / SLOT_FRAMES));
+    const weight = (k: number) => {
+      const edge = Math.min(k, len - 1 - k);
+      return edge >= fade ? 1 : Math.sin((edge / fade) * (Math.PI / 2)) ** 2;
+    };
+    for (let sec = firstSec; sec <= lastSec; sec++) {
+      const write = (l: Float32Array, r: Float32Array) => {
+        const old = Atomics.load(this.after.table, sec);
+        l.set(this.after.slots.subarray(slotOffset(old, 0), slotOffset(old, 0) + SLOT_FRAMES));
+        r.set(this.after.slots.subarray(slotOffset(old, 1), slotOffset(old, 1) + SLOT_FRAMES));
+        for (let i = 0; i < SLOT_FRAMES; i++) {
+          const k = sec * SLOT_FRAMES + i - offset;
+          if (k < 0 || k >= len) continue;
+          const g = weight(k);
+          l[i] = (1 - g) * l[i] + g * left[k];
+          r[i] = (1 - g) * r[i] + g * right[k];
+        }
+      };
+      while (!this.afterSlots.replace(sec, write)) await new Promise((res) => setTimeout(res, 5));
     }
   }
 

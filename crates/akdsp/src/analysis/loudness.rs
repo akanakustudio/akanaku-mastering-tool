@@ -11,10 +11,7 @@ const ABS_GATE: f64 = -70.0;
 
 fn k_weighting(sr: f64) -> [Biquad; 2] {
     // Stage 1: high shelf (+4 dB, 1.5 kHz); stage 2: RLB high pass (38 Hz). Same design as pyloudnorm.
-    [
-        Biquad::high_shelf(sr, 1500.0, 4.0, 1.0 / core::f64::consts::SQRT_2),
-        Biquad::high_pass(sr, 38.0, 0.5),
-    ]
+    [Biquad::high_shelf(sr, 1500.0, 4.0, 1.0 / core::f64::consts::SQRT_2), Biquad::high_pass(sr, 38.0, 0.5)]
 }
 
 pub fn segments(x: &Stereo, sr: u32) -> Segments {
@@ -55,10 +52,7 @@ fn window_means(seg: &Segments, w: usize) -> Vec<f64> {
 /// Integrated loudness with absolute (-70 LUFS) and relative (-10 LU) gates.
 pub fn integrated(seg: &Segments) -> f64 {
     let blocks = window_means(seg, 4); // 400 ms blocks, 100 ms hop
-    let gated: Vec<f64> = blocks
-        .into_iter()
-        .filter(|&z| to_lufs(z) > ABS_GATE)
-        .collect();
+    let gated: Vec<f64> = blocks.into_iter().filter(|&z| to_lufs(z) > ABS_GATE).collect();
     if gated.is_empty() {
         return f64::NEG_INFINITY;
     }
@@ -93,11 +87,7 @@ pub fn lra(st: &[f64]) -> f64 {
     if abs.is_empty() {
         return 0.0;
     }
-    let mean_pow = abs
-        .iter()
-        .map(|&l| libm::pow(10.0, (l + 0.691) / 10.0))
-        .sum::<f64>()
-        / abs.len() as f64;
+    let mean_pow = abs.iter().map(|&l| libm::pow(10.0, (l + 0.691) / 10.0)).sum::<f64>() / abs.len() as f64;
     let rel = to_lufs(mean_pow) - 20.0;
     let mut v: Vec<f64> = abs.into_iter().filter(|&l| l > rel).collect();
     if v.len() < 2 {
@@ -113,12 +103,8 @@ mod tests {
 
     fn sine(sr: u32, secs: f64, freq: f64, amp: f64) -> Stereo {
         let n = (f64::from(sr) * secs) as usize;
-        let ch: Vec<f32> = (0..n)
-            .map(|i| {
-                (amp * libm::sin(2.0 * core::f64::consts::PI * freq * i as f64 / f64::from(sr)))
-                    as f32
-            })
-            .collect();
+        let ch: Vec<f32> =
+            (0..n).map(|i| (amp * libm::sin(2.0 * core::f64::consts::PI * freq * i as f64 / f64::from(sr))) as f32).collect();
         Stereo::new(ch.clone(), ch)
     }
 

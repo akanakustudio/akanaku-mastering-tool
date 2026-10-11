@@ -14,11 +14,7 @@ pub struct LimiterParams {
 
 impl Default for LimiterParams {
     fn default() -> Self {
-        Self {
-            ceiling_dbtp: -1.0,
-            lookahead_ms: 1.5,
-            release_ms: 150.0,
-        }
+        Self { ceiling_dbtp: -1.0, lookahead_ms: 1.5, release_ms: 150.0 }
     }
 }
 
@@ -38,13 +34,15 @@ pub fn limit(x: &Stereo, sr: u32, input_gain_db: f32, p: LimiterParams) -> Limit
 
     // Detector: oversampled peak of either channel (16 taps per phase is enough to steer gain).
     let os = Oversampler4::new(48);
+    let bound = os.gain_bound();
+    let (wl, wr) = (os.window_abs_max(&xin.l), os.window_abs_max(&xin.r));
     let req: Vec<f32> = (0..n)
         .map(|i| {
-            let pk = os
-                .peak_at(&xin.l, i)
-                .max(xin.l[i].abs())
-                .max(os.peak_at(&xin.r, i))
-                .max(xin.r[i].abs());
+            // Exact skip: if no interpolated value can reach the ceiling, there is nothing to compute.
+            if wl[i].max(wr[i]) * bound <= ceiling {
+                return 1.0;
+            }
+            let pk = os.peak_at(&xin.l, i).max(xin.l[i].abs()).max(os.peak_at(&xin.r, i)).max(xin.r[i].abs());
             if pk > ceiling { ceiling / pk } else { 1.0 }
         })
         .collect();
@@ -84,20 +82,13 @@ pub fn limit(x: &Stereo, sr: u32, input_gain_db: f32, p: LimiterParams) -> Limit
     let mut gr = vec![0.0f32; n];
     let mut g = 1.0f32;
     for i in 0..n {
-        g = if att[i] < g {
-            att[i]
-        } else {
-            g + (att[i] - g) * rel
-        };
+        g = if att[i] < g { att[i] } else { g + (att[i] - g) * rel };
         let gi = g.min(att[i]);
         audio.l[i] = xin.l[i] * gi;
         audio.r[i] = xin.r[i] * gi;
         gr[i] = 20.0 * libm::log10f(gi.max(1e-6));
     }
-    LimiterOutput {
-        audio,
-        gain_reduction_db: gr,
-    }
+    LimiterOutput { audio, gain_reduction_db: gr }
 }
 
 #[cfg(test)]
@@ -115,10 +106,8 @@ mod tests {
                 seed ^= seed << 13;
                 seed ^= seed >> 17;
                 seed ^= seed << 5;
-                let noise = (seed as f32 / u32::MAX as f32 - 0.5)
-                    * if (i / 4000) % 3 == 0 { 1.0 } else { 0.1 };
-                0.6 * libm::sinf(2.0 * core::f32::consts::PI * 997.0 * i as f32 / 48_000.0).signum()
-                    + noise
+                let noise = (seed as f32 / u32::MAX as f32 - 0.5) * if (i / 4000) % 3 == 0 { 1.0 } else { 0.1 };
+                0.6 * libm::sinf(2.0 * core::f32::consts::PI * 997.0 * i as f32 / 48_000.0).signum() + noise
             })
             .collect();
         let x = Stereo::new(ch.clone(), ch.iter().map(|s| -s).collect());

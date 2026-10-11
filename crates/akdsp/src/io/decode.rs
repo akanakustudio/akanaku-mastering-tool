@@ -26,18 +26,11 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> Result<Decoded, DspErr
         hint.with_extension(ext);
     }
     let mut format = symphonia::default::get_probe()
-        .probe(
-            &hint,
-            mss,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
+        .probe(&hint, mss, FormatOptions::default(), MetadataOptions::default())
         .map_err(|e| DspError::Unsupported(format!("この形式には対応していません（{e}）")))?;
 
     let (track_id, mut decoder) = {
-        let track = format
-            .default_track(TrackType::Audio)
-            .ok_or_else(|| DspError::Unsupported("音声トラックがありません".into()))?;
+        let track = format.default_track(TrackType::Audio).ok_or_else(|| DspError::Unsupported("音声トラックがありません".into()))?;
         let params = track
             .codec_params
             .as_ref()
@@ -45,9 +38,7 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> Result<Decoded, DspErr
             .ok_or_else(|| DspError::Unsupported("音声の形式を判別できません".into()))?;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(params, &AudioDecoderOptions::default())
-            .map_err(|e| {
-                DspError::Unsupported(format!("このコーデックには対応していません（{e}）"))
-            })?;
+            .map_err(|e| DspError::Unsupported(format!("このコーデックには対応していません（{e}）")))?;
         (track.id, decoder)
     };
 
@@ -60,9 +51,7 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> Result<Decoded, DspErr
             Ok(None) => break,
             Err(Error::ResetRequired) => break,
             Err(e) => {
-                return Err(DspError::Decode(format!(
-                    "読み込み中にエラーが起きました（{e}）"
-                )));
+                return Err(DspError::Decode(format!("読み込み中にエラーが起きました（{e}）")));
             }
         };
         if packet.track_id != track_id {
@@ -77,9 +66,7 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> Result<Decoded, DspErr
                     planes = vec![Vec::new(); nch];
                 }
                 if nch != planes.len() {
-                    return Err(DspError::Unsupported(
-                        "途中でチャンネル数が変わるファイルには対応していません".into(),
-                    ));
+                    return Err(DspError::Unsupported("途中でチャンネル数が変わるファイルには対応していません".into()));
                 }
                 let frames = buf.frames();
                 scratch.resize(nch, Vec::new());
@@ -113,9 +100,5 @@ pub fn decode(bytes: Vec<u8>, extension: Option<&str>) -> Result<Decoded, DspErr
     if audio.is_empty() {
         return Err(DspError::Decode("音声データがありません".into()));
     }
-    Ok(Decoded {
-        audio,
-        sample_rate,
-        channels,
-    })
+    Ok(Decoded { audio, sample_rate, channels })
 }

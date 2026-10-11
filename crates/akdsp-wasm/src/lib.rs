@@ -5,7 +5,7 @@ use akdsp::analysis::{Analysis, analyze};
 use akdsp::display;
 use akdsp::dsp::resample::resample;
 use akdsp::io::{decode::decode, encode::encode_wav};
-use akdsp::master::{ChainCache, MasterSettings, RenderReport, render};
+use akdsp::master::{ChainCache, ChainStats, MasterSettings, RenderReport, render, render_region};
 use akdsp::{INTERNAL_SAMPLE_RATE, Stereo};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -55,8 +55,20 @@ struct LoadInfo<'a> {
 struct RenderInfo<'a> {
     after: &'a Analysis,
     report: &'a RenderReport,
+    stats: &'a ChainStats,
     settings: MasterSettings,
 }
+
+/// Wraps a JS progress callback: `on_progress(stage, fraction)` returning `false` cancels.
+fn js_progress(f: &js_sys::Function) -> impl FnMut(&str, f32) -> bool + '_ {
+    move |stage, fr| {
+        f.call2(&JsValue::NULL, &JsValue::from_str(stage), &JsValue::from_f64(f64::from(fr)))
+            .map(|v| v.as_bool() != Some(false))
+            .unwrap_or(true)
+    }
+}
+
+const CANCELLED: &str = "E-CANCEL: 新しい設定で処理し直すため中断しました";
 
 #[wasm_bindgen]
 pub struct Engine {
@@ -76,12 +88,7 @@ impl Default for Engine {
 impl Engine {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Engine {
-        Engine {
-            source: Stereo::default(),
-            before: None,
-            cache: ChainCache::default(),
-            after: None,
-        }
+        Engine { source: Stereo::default(), before: None, cache: ChainCache::default(), after: None }
     }
 
     /// Decodes a file (bytes + extension hint), converts it to 48 kHz and analyses it.
@@ -111,73 +118,72 @@ impl Engine {
         js
     }
 
-    /// Runs the mastering chain. `on_progress(stage, fraction)` is called along the way.
-    pub fn render(
-        &mut self,
-        settings: JsValue,
-        on_progress: &js_sys::Function,
-    ) -> Result<JsValue, JsError> {
+    /// Runs the mastering chain. `on_progress(stage, fraction)` is called along the way and
+    /// may return `false` to cancel (the error message then starts with E-CANCEL).
+    pub fn render(&mut self, settings: JsValue, on_progress: &js_sys::Function) -> Result<JsValue, JsError> {
         if self.source.is_empty() {
             return Err(JsError::new("音源が読み込まれていません"));
         }
-        let s: MasterSettings =
-            serde_wasm_bindgen::from_value(settings).map_err(|e| JsError::new(&e.to_string()))?;
-        let mut progress = |stage: &str, f: f32| {
-            let _ = on_progress.call2(
-                &JsValue::NULL,
-                &JsValue::from_str(stage),
-                &JsValue::from_f64(f64::from(f)),
-            );
-        };
-        let r = render(
+        let s: MasterSettings = serde_wasm_bindgen::from_value(settings).map_err(|e| JsError::new(&e.to_string()))?;
+        let r = render(&self.source, INTERNAL_SAMPLE_RATE, &s, &mut self.cache, &mut js_progress(on_progress))
+            .map_err(|_| JsError::new(CANCELLED))?;
+        let after = analyze(&r.audio, INTERNAL_SAMPLE_RATE);
+        let js = to_js(&RenderInfo { after: &after, report: &r.report, stats: &r.stats, settings: s });
+        self.after = Some((r.audio, after, s));
+        js
+    }
+
+    /// Renders `[start, end)` with new settings for quick auditioning (detailed design 4.5),
+    /// using `stats` from the last full render. Returns `{ left, right, offset }` where the
+    /// audio covers `[offset, offset + left.length)` including the splice margins.
+    pub fn render_region(
+        &self,
+        settings: JsValue,
+        start: u32,
+        end: u32,
+        region_lufs_goal: f32,
+        stats: JsValue,
+        on_progress: &js_sys::Function,
+    ) -> Result<JsValue, JsError> {
+        let s: MasterSettings = serde_wasm_bindgen::from_value(settings).map_err(|e| JsError::new(&e.to_string()))?;
+        let st: ChainStats = serde_wasm_bindgen::from_value(stats).map_err(|e| JsError::new(&e.to_string()))?;
+        let (audio, offset) = render_region(
             &self.source,
             INTERNAL_SAMPLE_RATE,
             &s,
-            &mut self.cache,
-            &mut progress,
-        );
-        let after = analyze(&r.audio, INTERNAL_SAMPLE_RATE);
-        let js = to_js(&RenderInfo {
-            after: &after,
-            report: &r.report,
-            settings: s,
-        });
-        self.after = Some((r.audio, after, s));
-        js
+            &st,
+            start as usize,
+            end as usize,
+            region_lufs_goal,
+            &mut js_progress(on_progress),
+        )
+        .map_err(|_| JsError::new(CANCELLED))?;
+        let obj = js_sys::Object::new();
+        let set = |k: &str, v: &JsValue| js_sys::Reflect::set(&obj, &JsValue::from_str(k), v).map_err(|_| JsError::new("result"));
+        set("left", &js_sys::Float32Array::from(&audio.l[..]).into())?;
+        set("right", &js_sys::Float32Array::from(&audio.r[..]).into())?;
+        set("offset", &JsValue::from_f64(offset as f64))?;
+        Ok(obj.into())
     }
 
     fn pick(&self, which: &str) -> Result<&Stereo, JsError> {
         match which {
             "before" => Ok(&self.source),
-            "after" => self
-                .after
-                .as_ref()
-                .map(|a| &a.0)
-                .ok_or_else(|| JsError::new("まだマスタリングしていません")),
+            "after" => self.after.as_ref().map(|a| &a.0).ok_or_else(|| JsError::new("まだマスタリングしていません")),
             _ => Err(JsError::new("which must be before or after")),
         }
     }
 
     /// Adopts a previously rendered "after" (e.g. read back from OPFS) so peaks, the gain
     /// delta and export work without rendering again. Returns its analysis.
-    pub fn adopt_after(
-        &mut self,
-        left: Vec<f32>,
-        right: Vec<f32>,
-        ceiling_dbtp: f32,
-    ) -> Result<JsValue, JsError> {
+    pub fn adopt_after(&mut self, left: Vec<f32>, right: Vec<f32>, ceiling_dbtp: f32) -> Result<JsValue, JsError> {
         if left.len() != self.source.len() || right.len() != left.len() {
-            return Err(JsError::new(
-                "保存されている処理結果の長さが元の音源と一致しません",
-            ));
+            return Err(JsError::new("保存されている処理結果の長さが元の音源と一致しません"));
         }
         let audio = Stereo::new(left, right);
         let after = analyze(&audio, INTERNAL_SAMPLE_RATE);
         let js = to_js(&after);
-        let settings = MasterSettings {
-            ceiling_dbtp,
-            ..MasterSettings::default()
-        };
+        let settings = MasterSettings { ceiling_dbtp, ..MasterSettings::default() };
         self.after = Some((audio, after, settings));
         js
     }
@@ -192,10 +198,7 @@ impl Engine {
     pub fn peaks(&self, which: &str, bin: u32) -> Result<Vec<f32>, JsError> {
         let bin = bin as usize;
         if which == "diff" {
-            let (after, a, _) = self
-                .after
-                .as_ref()
-                .ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
+            let (after, a, _) = self.after.as_ref().ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
             let gain = self.loudness_match_gain(a);
             return Ok(display::diff_peaks(&self.source, after, gain, bin));
         }
@@ -204,33 +207,15 @@ impl Engine {
 
     /// Level change after vs. before at 100 Hz, loudness-matched (0 dB = average change).
     pub fn gain_delta(&self) -> Result<Vec<f32>, JsError> {
-        let (after, a, _) = self
-            .after
-            .as_ref()
-            .ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
+        let (after, a, _) = self.after.as_ref().ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
         let offset = (a.lufs - self.before.as_ref().map_or(a.lufs, |b| b.lufs)) as f32;
-        Ok(display::gain_delta(
-            &self.source,
-            after,
-            INTERNAL_SAMPLE_RATE,
-            offset,
-        ))
+        Ok(display::gain_delta(&self.source, after, INTERNAL_SAMPLE_RATE, offset))
     }
 
     /// Encodes the latest render as WAV.
     pub fn export_wav(&self, sample_rate: u32, bits: u16) -> Result<Vec<u8>, JsError> {
-        let (after, _, s) = self
-            .after
-            .as_ref()
-            .ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
-        let enc = encode_wav(
-            after,
-            INTERNAL_SAMPLE_RATE,
-            sample_rate,
-            bits,
-            s.ceiling_dbtp,
-        )
-        .map_err(|e| JsError::new(&e.to_string()))?;
+        let (after, _, s) = self.after.as_ref().ok_or_else(|| JsError::new("まだマスタリングしていません"))?;
+        let enc = encode_wav(after, INTERNAL_SAMPLE_RATE, sample_rate, bits, s.ceiling_dbtp).map_err(|e| JsError::new(&e.to_string()))?;
         Ok(enc.bytes)
     }
 
@@ -259,30 +244,15 @@ pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue
     let x = if d.sample_rate == INTERNAL_SAMPLE_RATE {
         d.audio
     } else {
-        Stereo::new(
-            resample(&d.audio.l, d.sample_rate, INTERNAL_SAMPLE_RATE),
-            resample(&d.audio.r, d.sample_rate, INTERNAL_SAMPLE_RATE),
-        )
+        Stereo::new(resample(&d.audio.l, d.sample_rate, INTERNAL_SAMPLE_RATE), resample(&d.audio.r, d.sample_rate, INTERNAL_SAMPLE_RATE))
     };
-    to_js(&Info {
-        frames: x.len(),
-        sample_rate_in: d.sample_rate,
-        channels_in: d.channels,
-        analysis: analyze(&x, INTERNAL_SAMPLE_RATE),
-    })
+    to_js(&Info { frames: x.len(), sample_rate_in: d.sample_rate, channels_in: d.channels, analysis: analyze(&x, INTERNAL_SAMPLE_RATE) })
 }
 
 /// Encodes 48 kHz planar audio as a WAV file (album export).
 #[wasm_bindgen]
-pub fn encode_wav_planar(
-    left: Vec<f32>,
-    right: Vec<f32>,
-    sample_rate: u32,
-    bits: u16,
-    ceiling_dbtp: f32,
-) -> Result<Vec<u8>, JsError> {
+pub fn encode_wav_planar(left: Vec<f32>, right: Vec<f32>, sample_rate: u32, bits: u16, ceiling_dbtp: f32) -> Result<Vec<u8>, JsError> {
     let x = Stereo::new(left, right);
-    let enc = encode_wav(&x, INTERNAL_SAMPLE_RATE, sample_rate, bits, ceiling_dbtp)
-        .map_err(|e| JsError::new(&e.to_string()))?;
+    let enc = encode_wav(&x, INTERNAL_SAMPLE_RATE, sample_rate, bits, ceiling_dbtp).map_err(|e| JsError::new(&e.to_string()))?;
     Ok(enc.bytes)
 }

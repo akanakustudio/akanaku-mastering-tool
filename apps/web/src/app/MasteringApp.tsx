@@ -1,38 +1,40 @@
 // Single-track mastering screen (MVP of S-02/S-03/S-05: basic design 10, detailed design 16).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Player } from "../audio/player";
+import { DEFAULT_SETTINGS, regionLoudness } from "../features/settings/settings";
+import { SettingsControls, ToneCurve } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
-import type { DspMethods, LoadResult, MasterSettings, RenderResult } from "../workers/protocol";
+import type { ChainStats, DspMethods, LoadResult, MasterSettings, RenderResult } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
 import "./MasteringApp.css";
 
-const DEFAULT_SETTINGS: MasterSettings = { cleanup: 0.5, tone: 0, width: 1, monoBelowHz: 120, targetLufs: -14, ceilingDbtp: -1 };
-
-const LOUDNESS_PRESETS = [
-  { lufs: -14, label: "Streaming（-14 LUFS）" },
-  { lufs: -16, label: "Apple Music（-16 LUFS）" },
-  { lufs: -10, label: "Loud（-10 LUFS）" },
-  { lufs: -17, label: "Dynamic（-17 LUFS）" },
-];
-
 const STAGE_LABEL: Record<string, string> = {
   cleanup: "ノイズ除去",
-  tone: "音色・ステレオ",
+  tone: "音色・コンプ・ステレオ",
   limiter: "音圧調整",
   verify: "ピークの確認",
   display: "波形の準備",
   encode: "書き出し",
 };
 
+/** Region rendered first after a change: from 1 s before the playhead, 20 s long (detailed design 8.1). */
+const REGION_BEFORE_S = 1;
+const REGION_LENGTH_S = 20;
+
 type Track = Omit<LoadResult, "audio"> & { name: string };
 type Rendered = Omit<RenderResult, "audio">;
-type Status = { kind: "idle" } | { kind: "busy"; label: string } | { kind: "error"; message: string };
+type Status = { kind: "idle" } | { kind: "busy"; label: string } | { kind: "provisional"; label: string } | { kind: "error"; message: string };
 
 const fmt = (v: number, digits = 1) => (Number.isFinite(v) ? v.toFixed(digits) : "-∞");
+const newWorker = () => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" }));
+const isCancel = (e: unknown) => typeof e === "object" && e !== null && (e as { code?: string }).code === "E-CANCEL";
 
 export function MasteringApp({ active = true }: { active?: boolean }) {
-  const dsp = useMemo(() => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" })), []);
+  // One worker renders whole tracks, the other quick regions (detailed design 13.3: P0 / P1 jobs).
+  const dsp = useMemo(newWorker, []);
+  const regionDsp = useMemo(newWorker, []);
+  const cancel = useMemo(() => new Int32Array(new SharedArrayBuffer(4)), []);
   const [checks, setChecks] = useState<CheckResult[]>([]);
   const [track, setTrack] = useState<Track | null>(null);
   const [rendered, setRendered] = useState<Rendered | null>(null);
@@ -42,8 +44,9 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
   const [exportRate, setExportRate] = useState(44_100);
   const [exportBits, setExportBits] = useState<16 | 24>(24);
   const [dragging, setDragging] = useState(false);
-  const renderSeq = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Last full render: its statistics and settings feed region renders.
+  const last = useRef<{ stats: ChainStats; settings: MasterSettings; shortTerm: number[] } | null>(null);
 
   useEffect(() => {
     runMainThreadChecks().then(setChecks);
@@ -53,51 +56,73 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
   }, [active, player]);
   const blocking = checks.filter((c) => c.status === "error");
 
+  /**
+   * Re-render after a change: cancel any running render, render ~20 s around the playhead so the
+   * change can be heard within a second or so, then render the whole track (detailed design 4.5, 13.3).
+   */
   const runRender = useCallback(
-    async (s: MasterSettings, p: Player) => {
-      const seq = ++renderSeq.current;
-      setStatus({ kind: "busy", label: "マスタリング中…" });
+    async (s: MasterSettings, p: Player, frames: number) => {
+      const gen = Atomics.add(cancel, 0, 1) + 1;
+      const current = () => Atomics.load(cancel, 0) === gen;
+      const token = { sab: cancel, gen };
       try {
-        const res = await dsp.call("render", { settings: s }, [], (stage, f) => {
-          if (seq === renderSeq.current) setStatus({ kind: "busy", label: `${STAGE_LABEL[stage] ?? stage}${f > 0 ? ` ${Math.round(f * 100)}%` : ""}…` });
+        const prev = last.current;
+        if (prev) {
+          setStatus({ kind: "busy", label: "再生位置の付近を処理中…" });
+          const start = Math.max(0, p.position - REGION_BEFORE_S * 48_000);
+          const end = Math.min(frames, start + REGION_LENGTH_S * 48_000);
+          const goal = regionLoudness(prev.shortTerm, start, end, 48_000) + (s.targetLufs - prev.settings.targetLufs);
+          const r = await regionDsp.call("renderRegion", { settings: s, start, end, regionLufsGoal: goal, stats: prev.stats, cancel: token });
+          if (!current()) return;
+          await p.spliceAfter(r.offset, r.left, r.right);
+          if (!current()) return;
+        }
+        const label = prev ? "試聴用に再生位置の付近だけ処理済み。全体を処理中" : "マスタリング中";
+        setStatus({ kind: prev ? "provisional" : "busy", label: `${label}…` });
+        const res = await dsp.call("render", { settings: s, cancel: token }, [], (stage, f) => {
+          if (current()) setStatus({ kind: prev ? "provisional" : "busy", label: `${label}：${STAGE_LABEL[stage] ?? stage}${f > 0 ? ` ${Math.round(f * 100)}%` : ""}…` });
         });
-        if (seq !== renderSeq.current) return; // a newer render was requested meanwhile
+        if (!current()) return;
         await p.replaceAfter(res.audio);
         const { audio: _audio, ...rest } = res;
+        last.current = { stats: res.stats!, settings: s, shortTerm: res.after.shortTerm };
         setRendered(rest);
         setStatus({ kind: "idle" });
       } catch (e) {
-        if (seq === renderSeq.current) setStatus({ kind: "error", message: errorText(e) });
+        if (!isCancel(e) && current()) setStatus({ kind: "error", message: errorText(e) });
       }
     },
-    [dsp],
+    [dsp, regionDsp, cancel],
   );
 
-  // Re-render when settings change (debounced).
+  // Re-render when settings change (short debounce: the region render keeps it responsive).
   const firstRender = useRef(true);
   useEffect(() => {
-    if (!player) return;
+    if (!player || !track) return;
     if (firstRender.current) {
       firstRender.current = false;
       return;
     }
-    const t = setTimeout(() => runRender(settings, player), 400);
+    const t = setTimeout(() => runRender(settings, player, track.frames), 150);
     return () => clearTimeout(t);
-  }, [settings, player, runRender]);
+  }, [settings, player, track, runRender]);
 
   const openFile = async (file: File) => {
+    Atomics.add(cancel, 0, 1); // stop renders of the previous file
     setStatus({ kind: "busy", label: `${file.name} を読み込み中…` });
     try {
       const bytes = await file.arrayBuffer();
-      const res = await dsp.call("load", { bytes, name: file.name }, [bytes]);
+      const copy = bytes.slice(0);
+      const [res] = await Promise.all([dsp.call("load", { bytes, name: file.name }, [bytes]), regionDsp.call("loadSource", { bytes: copy, name: file.name }, [copy])]);
       await player?.close();
       const p = new Player(res.audio, res.audio);
       const { audio: _audio, ...info } = res;
+      last.current = null;
       setTrack({ ...info, name: file.name });
       setRendered(null);
       setPlayer(p);
       firstRender.current = true;
-      await runRender(settings, p);
+      await runRender(settings, p, info.frames);
     } catch (e) {
       setStatus({ kind: "error", message: errorText(e) });
     }
@@ -121,7 +146,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
   };
 
   const set = (patch: Partial<MasterSettings>) => setSettings((s) => ({ ...s, ...patch }));
-  const busy = status.kind === "busy";
+  const busy = status.kind === "busy" || status.kind === "provisional";
 
   return (
     <div
@@ -158,7 +183,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
           />
         </div>
         <span className={`status ${status.kind}`} role="status">
-          {status.kind === "busy" ? status.label : status.kind === "error" ? status.message : track ? "準備完了" : ""}
+          {status.kind === "busy" || status.kind === "provisional" ? status.label : status.kind === "error" ? status.message : track ? "準備完了" : ""}
         </span>
       </header>
 
@@ -179,35 +204,14 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
         </section>
       ) : (
         <main className="workspace">
-          <TrackView track={track} rendered={rendered} player={player} busy={busy} active={active} />
+          <TrackView track={track} rendered={rendered} player={player} busy={status.kind === "busy"} active={active} />
 
           <div className="panels">
             <section className="panel">
               <h2>調整</h2>
-              <Slider label="ノイズ除去（Cleanup）" hint="シャリシャリ・ザラザラを抑える強さ" value={Math.round(settings.cleanup * 100)} min={0} max={100} step={5} unit="%" onChange={(v) => set({ cleanup: v / 100 })} />
-              <Slider label="音色（Warm ⇔ Bright）" hint="マイナスで柔らかく、プラスで明るく" value={Math.round(settings.tone * 100)} min={-100} max={100} step={5} unit="" onChange={(v) => set({ tone: v / 100 })} />
-              <Slider label="ステレオの広がり（Width）" hint="100% がそのまま" value={Math.round(settings.width * 100)} min={0} max={150} step={5} unit="%" onChange={(v) => set({ width: v / 100 })} />
-              <label className="field">
-                <span>低音のモノラル化</span>
-                <select value={settings.monoBelowHz} onChange={(e) => set({ monoBelowHz: Number(e.target.value) })}>
-                  <option value={0}>しない</option>
-                  <option value={80}>80 Hz 以下</option>
-                  <option value={120}>120 Hz 以下</option>
-                  <option value={160}>160 Hz 以下</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>音圧の目標（Loudness）</span>
-                <select value={settings.targetLufs} onChange={(e) => set({ targetLufs: Number(e.target.value) })}>
-                  {LOUDNESS_PRESETS.map((p) => (
-                    <option key={p.lufs} value={p.lufs}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <SettingsControls settings={settings} onChange={set} />
               <p className="sub">True Peak の上限：{settings.ceilingDbtp.toFixed(1)} dBTP</p>
-              <button className="reset" onClick={() => setSettings(DEFAULT_SETTINGS)} disabled={busy}>
+              <button className="reset" onClick={() => setSettings(DEFAULT_SETTINGS)}>
                 初期値に戻す
               </button>
             </section>
@@ -215,6 +219,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
             <section className="panel">
               <h2>測定値</h2>
               <MeterTable before={track.before} after={rendered?.after} />
+              {rendered && <ToneCurve report={rendered.report} />}
               {rendered && (
                 <p className="sub">
                   リミッター：入力ゲイン {rendered.report.appliedGainDb >= 0 ? "+" : ""}
@@ -251,23 +256,6 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
         </main>
       )}
     </div>
-  );
-}
-
-function Slider(p: { label: string; hint: string; value: number; min: number; max: number; step: number; unit: string; onChange: (v: number) => void }) {
-  return (
-    <label className="slider">
-      <span className="label">
-        {p.label}
-        <span className="value">
-          {p.value > 0 && p.min < 0 ? "+" : ""}
-          {p.value}
-          {p.unit}
-        </span>
-      </span>
-      <input type="range" min={p.min} max={p.max} step={p.step} value={p.value} onChange={(e) => p.onChange(Number(e.target.value))} />
-      <span className="hint">{p.hint}</span>
-    </label>
   );
 }
 

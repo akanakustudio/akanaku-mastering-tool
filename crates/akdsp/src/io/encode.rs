@@ -21,13 +21,7 @@ impl XorShift {
     }
 }
 
-pub fn encode_wav(
-    x: &Stereo,
-    sr_in: u32,
-    sr_out: u32,
-    bits: u16,
-    ceiling_dbtp: f32,
-) -> Result<Encoded, DspError> {
+pub fn encode_wav(x: &Stereo, sr_in: u32, sr_out: u32, bits: u16, ceiling_dbtp: f32) -> Result<Encoded, DspError> {
     if bits != 16 && bits != 24 {
         return Err(DspError::Encode(format!("{bits} bit には対応していません")));
     }
@@ -40,31 +34,21 @@ pub fn encode_wav(
         tp = truepeak::true_peak_dbtp(&y);
     }
 
-    let spec = hound::WavSpec {
-        channels: 2,
-        sample_rate: sr_out,
-        bits_per_sample: bits,
-        sample_format: hound::SampleFormat::Int,
-    };
+    let spec = hound::WavSpec { channels: 2, sample_rate: sr_out, bits_per_sample: bits, sample_format: hound::SampleFormat::Int };
     let full = ((1i64 << (bits - 1)) - 1) as f32;
     let mut rng = XorShift(0x9E37_79B9_7F4A_7C15 ^ (y.len() as u64));
     let mut cursor = Cursor::new(Vec::with_capacity(y.len() * 2 * usize::from(bits / 8) + 64));
     {
-        let mut w = hound::WavWriter::new(&mut cursor, spec)
-            .map_err(|e| DspError::Encode(e.to_string()))?;
+        let mut w = hound::WavWriter::new(&mut cursor, spec).map_err(|e| DspError::Encode(e.to_string()))?;
         for i in 0..y.len() {
             for s in [y.l[i], y.r[i]] {
                 // TPDF dither of ±1 LSB.
                 let d = rng.next_f32() - rng.next_f32();
                 let v = (s * full + d).round().clamp(-full - 1.0, full) as i32;
-                w.write_sample(v)
-                    .map_err(|e| DspError::Encode(e.to_string()))?;
+                w.write_sample(v).map_err(|e| DspError::Encode(e.to_string()))?;
             }
         }
         w.finalize().map_err(|e| DspError::Encode(e.to_string()))?;
     }
-    Ok(Encoded {
-        bytes: cursor.into_inner(),
-        true_peak_dbtp: tp,
-    })
+    Ok(Encoded { bytes: cursor.into_inner(), true_peak_dbtp: tp })
 }

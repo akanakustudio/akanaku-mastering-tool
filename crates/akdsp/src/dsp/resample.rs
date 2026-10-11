@@ -19,12 +19,8 @@ pub fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
     // Cutoff just below the lower Nyquist, normalised to the upsampled rate.
     let fc = 0.5 / up.max(down) as f64 * 0.97;
     let center = (len - 1) as f64 / 2.0;
-    let h: Vec<f32> = (0..len)
-        .map(|n| {
-            (2.0 * fc * sinc(2.0 * fc * (n as f64 - center)) * kaiser(n, len, BETA) * up as f64)
-                as f32
-        })
-        .collect();
+    let h: Vec<f32> =
+        (0..len).map(|n| (2.0 * fc * sinc(2.0 * fc * (n as f64 - center)) * kaiser(n, len, BETA) * up as f64) as f32).collect();
 
     let out_len = (x.len() * up).div_ceil(down);
     let delay = len / 2; // group delay in upsampled samples
@@ -50,18 +46,12 @@ mod tests {
 
     #[test]
     fn sine_keeps_level_and_frequency_through_44k1_to_48k() {
-        let x: Vec<f32> = (0..44_100)
-            .map(|n| libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 44_100.0) * 0.5)
-            .collect();
+        let x: Vec<f32> = (0..44_100).map(|n| libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 44_100.0) * 0.5).collect();
         let y = resample(&x, 44_100, 48_000);
         assert_eq!(y.len(), 48_000);
         // Compare against the ideal 48 kHz sine in the steady middle part.
         let err = (4_000..44_000)
-            .map(|n| {
-                (y[n]
-                    - libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 48_000.0) * 0.5)
-                    .abs()
-            })
+            .map(|n| (y[n] - libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 48_000.0) * 0.5).abs())
             .fold(0.0f32, f32::max);
         assert!(err < 2e-3, "max error {err}");
     }

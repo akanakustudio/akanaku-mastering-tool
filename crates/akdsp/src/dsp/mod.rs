@@ -1,5 +1,7 @@
 pub mod biquad;
 pub mod cleanup;
+pub mod dynamics;
+pub mod eq;
 pub mod limiter;
 pub mod oversample;
 pub mod resample;
@@ -23,9 +25,5 @@ fn bessel_i0(x: f64) -> f64 {
 }
 
 pub(crate) fn sinc(x: f64) -> f64 {
-    if x.abs() < 1e-12 {
-        1.0
-    } else {
-        libm::sin(core::f64::consts::PI * x) / (core::f64::consts::PI * x)
-    }
+    if x.abs() < 1e-12 { 1.0 } else { libm::sin(core::f64::consts::PI * x) / (core::f64::consts::PI * x) }
 }

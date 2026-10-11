@@ -26,15 +26,9 @@ fn band_weight(f: f64) -> f32 {
     let w = if (BAND_LO..=BAND_HI).contains(&f) {
         1.0
     } else if f > lo0 && f < BAND_LO {
-        libm::pow(
-            libm::sin(0.5 * core::f64::consts::PI * libm::log2(f / lo0) / EDGE_OCT),
-            2.0,
-        )
+        libm::pow(libm::sin(0.5 * core::f64::consts::PI * libm::log2(f / lo0) / EDGE_OCT), 2.0)
     } else if f > BAND_HI && f < hi1 {
-        libm::pow(
-            libm::cos(0.5 * core::f64::consts::PI * libm::log2(f / BAND_HI) / EDGE_OCT),
-            2.0,
-        )
+        libm::pow(libm::cos(0.5 * core::f64::consts::PI * libm::log2(f / BAND_HI) / EDGE_OCT), 2.0)
     } else {
         0.0
     };
@@ -46,39 +40,29 @@ fn median(buf: &mut [f32]) -> f32 {
     *buf.select_nth_unstable_by(mid, f32::total_cmp).1
 }
 
-/// Applies the cleanup. `on_progress` receives 0..1.
-pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMut(f32)) -> Stereo {
+/// Applies the cleanup. `on_progress` receives 0..1 and returns false to cancel (→ `None`).
+pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMut(f32) -> bool) -> Option<Stereo> {
     if p.amount <= 0.0 || x.len() < N_FFT {
-        return x.clone();
+        return Some(x.clone());
     }
     let residual_gain = libm::powf(10.0, -10.0 * p.amount / 20.0);
     let percussive_gain = libm::powf(10.0, -3.5 * p.amount / 20.0);
 
     let bin_hz = f64::from(sr) / N_FFT as f64;
     let n_bins = N_FFT / 2 + 1;
-    let weights: Vec<f32> = (0..n_bins)
-        .map(|k| band_weight(k as f64 * bin_hz))
-        .collect();
+    let weights: Vec<f32> = (0..n_bins).map(|k| band_weight(k as f64 * bin_hz)).collect();
     let band_lo = weights.iter().position(|&w| w > 0.0).unwrap_or(n_bins);
-    let band_hi = weights
-        .iter()
-        .rposition(|&w| w > 0.0)
-        .map_or(band_lo, |k| k + 1);
+    let band_hi = weights.iter().rposition(|&w| w > 0.0).map_or(band_lo, |k| k + 1);
     if band_lo >= band_hi {
-        return x.clone();
+        return Some(x.clone());
     }
     // Extra bins on both sides give the frequency median some context.
     let ext_lo = band_lo.saturating_sub(KERNEL / 2);
     let ext_hi = (band_hi + KERNEL / 2).min(n_bins);
     let n_ext = ext_hi - ext_lo;
 
-    let window: Vec<f32> = (0..N_FFT)
-        .map(|n| {
-            libm::sqrtf(
-                0.5 - 0.5 * libm::cosf(2.0 * core::f32::consts::PI * n as f32 / N_FFT as f32),
-            )
-        })
-        .collect();
+    let window: Vec<f32> =
+        (0..N_FFT).map(|n| libm::sqrtf(0.5 - 0.5 * libm::cosf(2.0 * core::f32::consts::PI * n as f32 / N_FFT as f32))).collect();
     let pad = N_FFT - HOP;
     let len = x.len();
     // Enough frames that every sample, including the last ones, gets the full 4x overlap.
@@ -96,11 +80,7 @@ pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMu
         let start = frame_start(t);
         for (n, v) in out.iter_mut().enumerate() {
             let i = start + n as isize;
-            *v = if i >= 0 && (i as usize) < ch.len() {
-                ch[i as usize] * window[n]
-            } else {
-                0.0
-            };
+            *v = if i >= 0 && (i as usize) < ch.len() { ch[i as usize] * window[n] } else { 0.0 };
         }
     };
 
@@ -115,8 +95,8 @@ pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMu
             let k = ext_lo + b;
             pow[t * n_ext + b] = ((spec_l[k] + spec_r[k]) * 0.5).norm_sqr();
         }
-        if t % 256 == 0 {
-            on_progress(0.3 * t as f32 / n_frames as f32);
+        if t % 256 == 0 && !on_progress(0.3 * t as f32 / n_frames as f32) {
+            return None;
         }
     }
 
@@ -132,8 +112,8 @@ pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMu
             }
             harm[t * n_ext + b] = median(&mut win);
         }
-        if b % 32 == 0 {
-            on_progress(0.3 + 0.3 * b as f32 / n_ext as f32);
+        if b % 32 == 0 && !on_progress(0.3 + 0.3 * b as f32 / n_ext as f32) {
+            return None;
         }
     }
 
@@ -168,7 +148,9 @@ pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMu
             smoothed[t * n_band + b] = (a + gain[t * n_band + b] + c) / 3.0;
         }
     }
-    on_progress(0.7);
+    if !on_progress(0.7) {
+        return None;
+    }
 
     // Pass 2: apply the mask to each channel and overlap-add (√Hann² at 75 % overlap sums to 2).
     let mut out = Stereo::zeros(len);
@@ -193,9 +175,11 @@ pub fn cleanup(x: &Stereo, sr: u32, p: CleanupParams, on_progress: &mut dyn FnMu
                 }
             }
         }
-        on_progress(0.7 + 0.15 * (ci + 1) as f32);
+        if !on_progress(0.7 + 0.15 * (ci + 1) as f32) {
+            return None;
+        }
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -205,10 +189,7 @@ mod tests {
     #[test]
     fn zero_amount_is_bit_exact_bypass() {
         let x = Stereo::new(vec![0.25; 10_000], vec![-0.5; 10_000]);
-        assert_eq!(
-            cleanup(&x, 48_000, CleanupParams { amount: 0.0 }, &mut |_| {}),
-            x
-        );
+        assert_eq!(cleanup(&x, 48_000, CleanupParams { amount: 0.0 }, &mut |_| true).unwrap(), x);
     }
 
     #[test]
@@ -216,16 +197,10 @@ mod tests {
         // A 200 Hz tone is far below the band, so the STFT round trip must reconstruct it.
         // (The abrupt start of the test signal does have high-frequency content, so skip the edges.)
         let n = 48_000;
-        let ch: Vec<f32> = (0..n)
-            .map(|i| 0.5 * libm::sinf(2.0 * core::f32::consts::PI * 200.0 * i as f32 / 48_000.0))
-            .collect();
+        let ch: Vec<f32> = (0..n).map(|i| 0.5 * libm::sinf(2.0 * core::f32::consts::PI * 200.0 * i as f32 / 48_000.0)).collect();
         let x = Stereo::new(ch.clone(), ch);
-        let y = cleanup(&x, 48_000, CleanupParams { amount: 1.0 }, &mut |_| {});
-        let err = x.l[2048..n - 2048]
-            .iter()
-            .zip(&y.l[2048..n - 2048])
-            .map(|(a, b)| (a - b).abs())
-            .fold(0.0f32, f32::max);
+        let y = cleanup(&x, 48_000, CleanupParams { amount: 1.0 }, &mut |_| true).unwrap();
+        let err = x.l[2048..n - 2048].iter().zip(&y.l[2048..n - 2048]).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(err < 1e-4, "max error {err}");
     }
 
@@ -240,11 +215,8 @@ mod tests {
         };
         let ch: Vec<f32> = (0..96_000).map(|_| noise()).collect();
         let x = Stereo::new(ch.clone(), ch);
-        let y = cleanup(&x, 48_000, CleanupParams { amount: 1.0 }, &mut |_| {});
+        let y = cleanup(&x, 48_000, CleanupParams { amount: 1.0 }, &mut |_| true).unwrap();
         let e = |v: &[f32]| v.iter().map(|s| s * s).sum::<f32>();
-        assert!(
-            e(&y.l) < e(&x.l),
-            "white noise should lose energy in the high band"
-        );
+        assert!(e(&y.l) < e(&x.l), "white noise should lose energy in the high band");
     }
 }

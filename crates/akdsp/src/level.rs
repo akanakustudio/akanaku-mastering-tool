@@ -30,9 +30,7 @@ mod tests {
     use super::*;
 
     fn sine(len: usize, amp: f32) -> Vec<f32> {
-        (0..len)
-            .map(|n| amp * libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 48_000.0))
-            .collect()
+        (0..len).map(|n| amp * libm::sinf(2.0 * core::f32::consts::PI * 1000.0 * n as f32 / 48_000.0)).collect()
     }
 
     #[test]

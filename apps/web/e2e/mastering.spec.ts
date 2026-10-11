@@ -29,6 +29,19 @@ test("open → auto master → A/B → export", async ({ page }) => {
   await page.waitForTimeout(800);
   for (const k of ["1", "3", "2"]) await page.keyboard.press(k);
   await expect(page.getByRole("radio", { name: "After" })).toHaveAttribute("aria-checked", "true");
+
+  // Moving a control: the region around the playhead is re-rendered first (detailed design 4.5).
+  const slider = page.getByRole("slider", { name: /自動トーン補正/ });
+  const t1 = Date.now();
+  await slider.evaluate((el: HTMLInputElement) => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(el, "90");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await expect(page.getByRole("status")).toContainText("試聴用", { timeout: 30_000 });
+  const regionSec = (Date.now() - t1) / 1000;
+  await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 200_000 });
+  console.log(`[${test.info().project.name}] change → region audible ${regionSec.toFixed(1)} s, full ${((Date.now() - t1) / 1000).toFixed(1)} s`);
+  expect(regionSec).toBeLessThan(5);
   await page.getByRole("button", { name: "■ 停止" }).click();
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV を書き出す" }).click()]);
