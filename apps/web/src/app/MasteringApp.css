@@ -52,3 +52,5 @@
 .tone-curve .axis { fill: var(--text-muted); font-size: 9px; font-family: var(--font-num); }
 .tone-curve .curve { fill: none; stroke: var(--accent); stroke-width: 2; }
 .status.provisional { color: var(--accent); }
+.project .export-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 14px; }
+.storage { margin: 0; }

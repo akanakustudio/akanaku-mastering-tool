@@ -5,7 +5,9 @@ import { DEFAULT_SETTINGS, regionLoudness } from "../features/settings/settings"
 import { SettingsControls, ToneCurve } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
-import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, storeSource } from "../storage/workspace";
+import { exportProject, importProject } from "../features/project/project";
+import { ProjectPanel } from "../features/project/ProjectPanel";
+import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, saveWorkspace, storeSource } from "../storage/workspace";
 import type { ChainStats, DspMethods, LoadResult, MasterSettings, RenderReport, RenderResult } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
 import "./MasteringApp.css";
@@ -197,14 +199,54 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const currentRecord = (): SavedSingle | null =>
+    track && sourceId ? { sourceId, name: track.name, settings, exportRate, exportBits, rendered: savedRender } : null;
+
   // Autosave (detailed design 13.1).
   useEffect(() => {
-    if (!track || !sourceId) return;
-    save({ sourceId, name: track.name, settings, exportRate, exportBits, rendered: savedRender } satisfies SavedSingle);
+    const rec = currentRecord();
+    if (rec) save(rec);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track, sourceId, settings, exportRate, exportBits, savedRender]);
 
   const closeTrack = async () => {
     if (!confirm("この曲を閉じますか？（保存されている作業も消えます）")) return;
+    await discardTrack();
+  };
+
+  // Project file (detailed design 13.5).
+  const saveProjectFile = async (includeRenders: boolean) => {
+    const rec = currentRecord();
+    if (!rec) return;
+    try {
+      const file = await loadSource(rec.sourceId);
+      if (!file) throw new Error("音源がブラウザ内に見つかりません（E-SRC-001）");
+      setStatus({ kind: "busy", label: "プロジェクトファイルを作成中…" });
+      const keepRender = includeRenders && rec.rendered !== undefined;
+      await exportProject(dsp, "single", keepRender ? rec : { ...rec, rendered: undefined }, [{ id: rec.sourceId, file }], keepRender ? [SINGLE_AFTER] : [], rec.name.replace(/\.[^.]+$/, ""), (f) =>
+        setStatus({ kind: "busy", label: `プロジェクトファイルを作成中… ${Math.round(f * 100)}%` }),
+      );
+      setStatus({ kind: "idle" });
+    } catch (e) {
+      setStatus({ kind: "error", message: errorText(e) });
+    }
+  };
+  const loadProjectFile = async (file: File) => {
+    if (track && !confirm("今開いている曲を、読み込むプロジェクトで置き換えます。よろしいですか？")) return;
+    try {
+      setStatus({ kind: "busy", label: "プロジェクトファイルを読み込み中…" });
+      await discardTrack();
+      const { project, sources } = await importProject(dsp, file, "single", (f) => setStatus({ kind: "busy", label: `プロジェクトファイルを読み込み中… ${Math.round(f * 100)}%` }));
+      for (const src of sources) await storeSource(src.id, src.file);
+      await saveWorkspace("single", project.workspace);
+      location.reload(); // restores from the saved workspace
+    } catch (e) {
+      setStatus({ kind: "error", message: errorText(e) });
+    }
+  };
+
+  /** Removes the open song and its saved data (no confirmation). */
+  const discardTrack = async () => {
     Atomics.add(cancel, 0, 1);
     await player?.close();
     setPlayer(null);
@@ -297,7 +339,13 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
             <a href="#p0">P0 検証ページ</a>
           </p>
         </section>
-      ) : (
+      ) : null}
+      {!track && (
+        <div className="workspace">
+          <ProjectPanel busy={busy} hasWork={false} onExport={saveProjectFile} onImport={loadProjectFile} />
+        </div>
+      )}
+      {track && (
         <main className="workspace">
           <TrackView track={track} rendered={rendered} player={player} busy={status.kind === "busy"} active={active} />
 
@@ -348,6 +396,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
             </section>
           </div>
           <p className="shortcuts">ショートカット：Space 再生/停止 ・ 1 / 2 / 3 Before / After / 差分 ・ T 切り替え ・ M 音量合わせ ・ V 表示方法 ・ D 差分の表し方 ・ ⌘＋スクロール 拡大縮小</p>
+          <ProjectPanel busy={busy} hasWork onExport={saveProjectFile} onImport={loadProjectFile} />
         </main>
       )}
     </div>

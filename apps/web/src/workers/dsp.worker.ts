@@ -1,6 +1,6 @@
 // DSP worker: loads the Rust/WASM engine and runs jobs off the main thread
 // (detailed design 3.1, 18.3).
-import { Zip, ZipPassThrough } from "fflate";
+import { Unzip, UnzipPassThrough, Zip, ZipPassThrough } from "fflate";
 import { applyFades } from "../features/album/fade";
 import init, { Engine, album_tone_plan, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
 import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
@@ -215,6 +215,135 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
       }
     }
     return { result: { files, zip } };
+  },
+
+  async exportProject({ fileName, projectJson, sources, renders }) {
+    progress("project", 0);
+    const out = await openSync(`export/${fileName}`);
+    out.truncate(0);
+    let at = 0;
+    let failed: Error | null = null;
+    const zip = new Zip((err, chunk) => {
+      if (err) failed = err;
+      else {
+        out.write(chunk, { at });
+        at += chunk.length;
+      }
+    });
+    try {
+      const add = async (name: string, read: () => AsyncGenerator<Uint8Array>) => {
+        const entry = new ZipPassThrough(name);
+        zip.add(entry);
+        let prev: Uint8Array | null = null;
+        for await (const chunk of read()) {
+          if (prev) entry.push(prev);
+          prev = chunk;
+        }
+        entry.push(prev ?? new Uint8Array(0), true);
+      };
+      await add("project.json", async function* () {
+        yield new TextEncoder().encode(projectJson);
+      });
+      for (const [i, s] of sources.entries()) {
+        progress("project", i / (sources.length + renders.length));
+        await add(`sources/${s.id}`, async function* () {
+          const reader = s.file.stream().getReader();
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            yield value;
+          }
+        });
+      }
+      for (const path of renders) {
+        await add(`renders/${path}`, async function* () {
+          const h = await openSync(path, false);
+          try {
+            const size = h.getSize();
+            const buf = new Uint8Array(8 << 20);
+            for (let off = 0; off < size; off += buf.length) {
+              const n = h.read(buf, { at: off });
+              yield buf.slice(0, n);
+            }
+          } finally {
+            h.close();
+          }
+        });
+      }
+      zip.end();
+      if (failed) throw failed;
+      out.flush();
+    } finally {
+      out.close();
+    }
+    return { result: { path: `export/${fileName}` } };
+  },
+
+  async importProject({ file }) {
+    let projectJson = "";
+    const parts = new Map<string, Uint8Array[]>();
+    const renderHandles: { path: string; h: Awaited<ReturnType<typeof openSync>>; at: number }[] = [];
+    const pending: Promise<void>[] = [];
+    let renders = 0;
+    const unzip = new Unzip((entry) => {
+      const name = entry.name;
+      if (name.startsWith("renders/")) {
+        renders++;
+        const path = name.slice("renders/".length);
+        const slot = { path, h: null as unknown as Awaited<ReturnType<typeof openSync>>, at: 0 };
+        const ready = openSync(path).then((h) => {
+          h.truncate(0);
+          slot.h = h;
+        });
+        pending.push(ready);
+        renderHandles.push(slot);
+        entry.ondata = (err, chunk) => {
+          if (err) throw err;
+          // Opened asynchronously: queue writes until the handle exists.
+          const c = chunk.slice();
+          pending.push(
+            ready.then(() => {
+              slot.h.write(c, { at: slot.at });
+              slot.at += c.length;
+            }),
+          );
+        };
+      } else {
+        const list: Uint8Array[] = [];
+        parts.set(name, list);
+        entry.ondata = (err, chunk) => {
+          if (err) throw err;
+          list.push(chunk.slice());
+        };
+      }
+      entry.start();
+    });
+    unzip.register(UnzipPassThrough);
+    const reader = file.stream().getReader();
+    let read = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        unzip.push(new Uint8Array(0), true);
+        break;
+      }
+      unzip.push(value);
+      read += value.length;
+      progress("import", read / file.size);
+    }
+    await Promise.all(pending);
+    for (const r of renderHandles) {
+      r.h.flush();
+      r.h.close();
+    }
+    const json = parts.get("project.json");
+    if (!json) throw new Error("E-IN-002: プロジェクトファイルではありません（project.json がありません）");
+    projectJson = new TextDecoder().decode(await new Blob(json as BlobPart[]).arrayBuffer());
+    const sources: { id: string; file: File }[] = [];
+    for (const [name, list] of parts) {
+      if (name.startsWith("sources/")) sources.push({ id: name.slice("sources/".length), file: new File(list as BlobPart[], name) });
+    }
+    return { result: { projectJson, sources, renders } };
   },
 
   async readStored({ key }) {

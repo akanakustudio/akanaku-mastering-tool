@@ -1,7 +1,7 @@
 // E2E-01 (detailed design 21.4): open a song, master it, A/B, export.
 // Needs a real song: AKM_E2E_SONG=/path/to/song.wav npx playwright test
 import { expect, test } from "./fixtures";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 const song = process.env.AKM_E2E_SONG;
 
@@ -13,7 +13,7 @@ test("open → auto master → A/B → export", async ({ page }) => {
 
   await page.goto("/");
   const t0 = Date.now();
-  await page.locator('.app:not(.album) input[type="file"]').setInputFiles(song!);
+  await page.locator('.app:not(.album) .app-header input[type="file"]').setInputFiles(song!);
   await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 200_000 });
   const seconds = (Date.now() - t0) / 1000;
 
@@ -51,6 +51,29 @@ test("open → auto master → A/B → export", async ({ page }) => {
   await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 120_000 });
   console.log(`[${test.info().project.name}] restore after reload ${((Date.now() - t2) / 1000).toFixed(1)} s`);
   await expect(page.getByRole("slider", { name: /自動トーン補正/ })).toHaveValue("90");
+
+  // Project file round trip (detailed design 13.5): save with renders, close, load it back.
+  page.on("dialog", (d) => void d.accept());
+  await page.getByRole("checkbox", { name: /処理結果も含める/ }).check();
+  const [projectDl] = await Promise.all([page.waitForEvent("download", { timeout: 120_000 }), page.getByRole("button", { name: /プロジェクトファイルに保存/ }).click()]);
+  const projectPath = test.info().outputPath("p.akmaster");
+  await projectDl.saveAs(projectPath);
+  await page.getByRole("button", { name: "閉じる" }).click();
+  await expect(page.getByRole("button", { name: "プロジェクトファイルを読み込む" })).toBeVisible();
+  await page.locator('.project input[type="file"]').first().setInputFiles(projectPath);
+  await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 120_000 });
+  await expect(page.getByRole("slider", { name: /自動トーン補正/ })).toHaveValue("90");
+
+  // A second tab shows a notice and can take over (detailed design 13.4).
+  const other = await page.context().newPage();
+  await other.goto("/");
+  await expect(other.getByText("別のタブで開かれています")).toBeVisible();
+  await other.getByRole("button", { name: /このタブで使う/ }).click();
+  await expect(other.getByRole("tab", { name: "シングル" })).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("別のタブで開かれています")).toBeVisible();
+  await other.close();
+  await page.reload();
+  await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 120_000 });
 
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "WAV を書き出す" }).click()]);
   const path = await download.path();

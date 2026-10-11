@@ -31,6 +31,9 @@ export interface DspMethods {
   /** `key` is a path under OPFS album/ unless `path` gives the full OPFS path. */
   openStored: { params: { file: File; key: string; path?: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
   exportAlbum: { params: ExportAlbumParams; result: { files: string[]; zip: string | null } };
+  /** Project file (.akmaster, detailed design 13.5): ZIP of project.json, song files and optional renders. */
+  exportProject: { params: ExportProjectParams; result: { path: string } };
+  importProject: { params: { file: File }; result: { projectJson: string; sources: { id: string; file: File }[]; renders: number } };
   /** Reads a stored album render (After) back, e.g. for continuous playback. */
   readStored: { params: { key: string }; result: StereoData };
   /** Album tone harmonisation (detailed design 10.3); spectra/result are POINTS values per track, concatenated. */
@@ -122,4 +125,12 @@ export type SelfTestResult = {
   rmsDbfs: number;
   peakDbfs: number;
   opfs: { ok: boolean; detail: string };
+};
+
+export type ExportProjectParams = {
+  fileName: string;
+  projectJson: string;
+  sources: { id: string; file: File }[];
+  /** OPFS paths of renders to include, stored in the ZIP under renders/ with the same path. */
+  renders: string[];
 };
