@@ -8,7 +8,9 @@ import { DEFAULT_SETTINGS } from "../features/settings/settings";
 import { SettingsControls, Slider } from "../features/settings/SettingsControls";
 import { MeterTable, TrackView, clock, type RenderData, type TrackData } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
-import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, storeSource } from "../storage/workspace";
+import { exportProject, importProject } from "../features/project/project";
+import { ProjectPanel } from "../features/project/ProjectPanel";
+import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, saveWorkspace, storeSource } from "../storage/workspace";
 import type { Analysis, DspMethods, MasterSettings, RenderReport } from "../workers/protocol";
 import "./AlbumApp.css";
 
@@ -142,6 +144,20 @@ export function AlbumApp({ active }: { active: boolean }) {
     })();
   }, []);
 
+  const currentRecord = (): SavedAlbum => ({
+    albumTitle,
+    common,
+    keep,
+    harmonize,
+    anchorChoice,
+    version,
+    exportRate,
+    exportBits,
+    perTrack,
+    continuous,
+    tracks: tracks.map(({ file, state: _s, error: _e, ...t }) => ({ ...t, name: file.name })),
+  });
+
   // Autosave (detailed design 13.1).
   useEffect(() => {
     if (!restored) return;
@@ -163,6 +179,48 @@ export function AlbumApp({ active }: { active: boolean }) {
 
   const closeAlbum = async () => {
     if (!confirm("アルバムを閉じますか？（保存されている曲と処理結果も消えます）")) return;
+    await discardAlbum();
+  };
+
+  // Project file (detailed design 13.5).
+  const saveProjectFile = async (includeRenders: boolean) => {
+    const rec = currentRecord();
+    try {
+      setJob("プロジェクトファイルを作成中…");
+      const ws = includeRenders ? rec : { ...rec, tracks: rec.tracks.map(({ result: _r, ...t }) => t) };
+      const renders = includeRenders ? tracks.filter((t) => t.result).map((t) => `album/${t.id}.f32`) : [];
+      await exportProject(
+        batch,
+        "album",
+        ws,
+        tracks.map((t) => ({ id: t.id, file: t.file })),
+        renders,
+        albumTitle,
+        (f) => setJob(`プロジェクトファイルを作成中… ${Math.round(f * 100)}%`),
+      );
+    } catch (e) {
+      setError(errorText(e));
+    }
+    setJob(null);
+  };
+  const loadProjectFile = async (file: File) => {
+    if (tracks.length && !confirm("今のアルバムを、読み込むプロジェクトで置き換えます。よろしいですか？")) return;
+    try {
+      setJob("プロジェクトファイルを読み込み中…");
+      await discardAlbum();
+      const { project, sources } = await importProject(batch, file, "album", (f) => setJob(`プロジェクトファイルを読み込み中… ${Math.round(f * 100)}%`));
+      for (const src of sources) await storeSource(src.id, src.file);
+      await saveWorkspace("album", project.workspace);
+      location.reload(); // restores from the saved workspace
+    } catch (e) {
+      setError(errorText(e));
+      setJob(null);
+    }
+  };
+
+  /** Removes all tracks and their saved data (no confirmation). */
+  const discardAlbum = async () => {
+    stopSequence();
     closeView();
     const ids = tracksRef.current.map((t) => t.id);
     setTracks([]);
@@ -442,6 +500,11 @@ export function AlbumApp({ active }: { active: boolean }) {
         </span>
       </header>
 
+      {tracks.length === 0 && (
+        <div className="workspace">
+          <ProjectPanel busy={busy} hasWork={false} onExport={saveProjectFile} onImport={loadProjectFile} />
+        </div>
+      )}
       {tracks.length === 0 ? (
         <section className="empty">
           <p>アルバムの曲をまとめてドロップしてください（WAV / MP3 / FLAC / AIFF / M4A）。</p>
@@ -711,6 +774,7 @@ export function AlbumApp({ active }: { active: boolean }) {
               {!allDone && " 先に「自動バランス」で全曲を処理してください。"}
             </p>
           </section>
+          <ProjectPanel busy={busy} hasWork={allDone || tracks.some((t) => t.before)} onExport={saveProjectFile} onImport={loadProjectFile} />
         </main>
       )}
     </div>

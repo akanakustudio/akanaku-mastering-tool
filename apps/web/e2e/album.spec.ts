@@ -16,7 +16,7 @@ test("album: auto balance and export", async ({ page }) => {
 
   await page.goto("/");
   await page.getByRole("tab", { name: "アルバム" }).click();
-  await page.locator(".album input[type=file]").setInputFiles(songs);
+  await page.locator(".album .app-header input[type=file]").setInputFiles(songs);
   const rows = page.locator(".tracks tbody tr");
   await expect(rows).toHaveCount(songs.length);
   await expect(page.getByRole("button", { name: /自動バランス/ })).toBeEnabled({ timeout: 120_000 });
@@ -79,6 +79,20 @@ test("album: auto balance and export", async ({ page }) => {
     peak = Math.max(peak, Math.abs(v) / 8388608);
   }
   expect(peak).toBeLessThan(1e-3);
+
+  // Project file without renders: save, close the album, load it back; tracks return, results must be redone.
+  page.on("dialog", (d) => void d.accept());
+  const [projectDl] = await Promise.all([page.waitForEvent("download", { timeout: 300_000 }), page.getByRole("button", { name: /プロジェクトファイルに保存/ }).click()]);
+  const projectPath = test.info().outputPath("a.akmaster");
+  await projectDl.saveAs(projectPath);
+  await page.getByRole("button", { name: "アルバムを閉じる" }).click();
+  await expect(rows).toHaveCount(0);
+  await page.locator('.album .project input[type="file"]').setInputFiles(projectPath);
+  await page.waitForEvent("load", { timeout: 120_000 }); // the app reloads after importing
+  await expect(page.getByRole("tab", { name: "アルバム" })).toHaveAttribute("aria-selected", "true");
+  await expect(rows).toHaveCount(songs.length, { timeout: 60_000 });
+  await expect(page.getByRole("button", { name: "自動バランス（全曲を処理）" })).toBeEnabled();
+  await expect(rows.first().locator("td:nth-child(5)")).toHaveText("—");
 
   expect(errors).toEqual([]);
 });
