@@ -1,10 +1,9 @@
 // Single-track mastering screen (MVP of S-02/S-03/S-05: basic design 10, detailed design 16).
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Mode, type ModeValue } from "../audio/layout";
 import { Player } from "../audio/player";
-import { Waveform, type DiffKind, type Layout, type Source } from "../features/waveform/Waveform";
+import { MeterTable, TrackView } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
-import type { Analysis, DspMethods, LoadResult, MasterSettings, RenderResult } from "../workers/protocol";
+import type { DspMethods, LoadResult, MasterSettings, RenderResult } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
 import "./MasteringApp.css";
 
@@ -26,20 +25,13 @@ const STAGE_LABEL: Record<string, string> = {
   encode: "書き出し",
 };
 
-const MODE_LABEL: Record<ModeValue, string> = { [Mode.BEFORE]: "Before", [Mode.AFTER]: "After", [Mode.DELTA]: "差分" };
-const LAYOUTS: { id: Layout; label: string }[] = [
-  { id: "single", label: "切り替え" },
-  { id: "overlay", label: "重ね" },
-  { id: "stacked", label: "上下に並べる" },
-];
-
 type Track = Omit<LoadResult, "audio"> & { name: string };
 type Rendered = Omit<RenderResult, "audio">;
 type Status = { kind: "idle" } | { kind: "busy"; label: string } | { kind: "error"; message: string };
 
 const fmt = (v: number, digits = 1) => (Number.isFinite(v) ? v.toFixed(digits) : "-∞");
 
-export function MasteringApp() {
+export function MasteringApp({ active = true }: { active?: boolean }) {
   const dsp = useMemo(() => new WorkerClient<DspMethods>(new Worker(new URL("../workers/dsp.worker.ts", import.meta.url), { type: "module" })), []);
   const [checks, setChecks] = useState<CheckResult[]>([]);
   const [track, setTrack] = useState<Track | null>(null);
@@ -47,31 +39,19 @@ export function MasteringApp() {
   const [player, setPlayer] = useState<Player | null>(null);
   const [settings, setSettings] = useState<MasterSettings>(DEFAULT_SETTINGS);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
-  const [mode, setMode] = useState<ModeValue>(Mode.AFTER);
-  const [playing, setPlaying] = useState(false);
-  const [loudnessMatch, setLoudnessMatch] = useState(true);
-  const [mono, setMono] = useState(false);
-  const [layout, setLayout] = useState<Layout>("stacked");
-  const [diffKind, setDiffKind] = useState<DiffKind>("gain");
-  const [stacked, setStacked] = useState<Record<Source, boolean>>({ before: true, after: true, diff: true });
   const [exportRate, setExportRate] = useState(44_100);
   const [exportBits, setExportBits] = useState<16 | 24>(24);
   const [dragging, setDragging] = useState(false);
-  const timeRef = useRef<HTMLSpanElement>(null);
   const renderSeq = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     runMainThreadChecks().then(setChecks);
   }, []);
-  const blocking = checks.filter((c) => c.status === "error");
-
-  // Loudness-matched comparison (detailed design 12.3): Before and Delta are scaled to After's loudness.
   useEffect(() => {
-    if (!player || !track || !rendered) return;
-    const g = loudnessMatch ? 10 ** ((rendered.after.lufs - track.before.lufs) / 20) : 1;
-    player.setGains(g, g);
-  }, [player, track, rendered, loudnessMatch]);
+    if (!active) player?.pause();
+  }, [active, player]);
+  const blocking = checks.filter((c) => c.status === "error");
 
   const runRender = useCallback(
     async (s: MasterSettings, p: Player) => {
@@ -116,58 +96,12 @@ export function MasteringApp() {
       setTrack({ ...info, name: file.name });
       setRendered(null);
       setPlayer(p);
-      setPlaying(false);
-      setMode(Mode.AFTER);
       firstRender.current = true;
       await runRender(settings, p);
     } catch (e) {
       setStatus({ kind: "error", message: errorText(e) });
     }
   };
-
-  const togglePlay = async () => {
-    if (!player) return;
-    await player.start();
-    if (player.playing) player.pause();
-    else player.play();
-    setPlaying(player.playing);
-  };
-  const chooseMode = (m: ModeValue) => {
-    player?.setMode(m);
-    setMode(m);
-  };
-
-  // Playhead time and play state, read from shared memory every frame.
-  useEffect(() => {
-    let raf = 0;
-    const tick = () => {
-      if (player && timeRef.current) timeRef.current.textContent = clock(player.position / 48_000);
-      if (player && player.playing !== playing) setPlaying(player.playing);
-      raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [player, playing]);
-
-  // Keyboard shortcuts (basic design 10.6).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "SELECT" || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.code === "Space") {
-        e.preventDefault();
-        void togglePlay();
-      } else if (e.key === "1") chooseMode(Mode.BEFORE);
-      else if (e.key === "2") chooseMode(Mode.AFTER);
-      else if (e.key === "3") chooseMode(Mode.DELTA);
-      else if (e.key === "t" || e.key === "`") chooseMode(mode === Mode.AFTER ? Mode.BEFORE : Mode.AFTER);
-      else if (e.key === "m") setLoudnessMatch((v) => !v);
-      else if (e.key === "v") setLayout((l) => LAYOUTS[(LAYOUTS.findIndex((x) => x.id === l) + 1) % LAYOUTS.length].id);
-      else if (e.key === "d") setDiffKind((k) => (k === "gain" ? "signal" : "gain"));
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
 
   const exportWav = async () => {
     if (!track) return;
@@ -245,78 +179,7 @@ export function MasteringApp() {
         </section>
       ) : (
         <main className="workspace">
-          <section className="transport">
-            <button className="play" onClick={togglePlay} disabled={!player}>
-              {playing ? "■ 停止" : "▶ 再生"}
-            </button>
-            <span className="segmented" role="radiogroup" aria-label="再生モード">
-              {([Mode.BEFORE, Mode.AFTER, Mode.DELTA] as ModeValue[]).map((m, i) => (
-                <button key={m} role="radio" aria-checked={mode === m} className={mode === m ? "on" : ""} onClick={() => chooseMode(m)} title={`キー ${i + 1}`}>
-                  {MODE_LABEL[m]}
-                </button>
-              ))}
-            </span>
-            <label title="キー M">
-              <input type="checkbox" checked={loudnessMatch} onChange={() => setLoudnessMatch(!loudnessMatch)} /> 音量を合わせて比較
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={mono}
-                onChange={() => {
-                  player?.setMono(!mono);
-                  setMono(!mono);
-                }}
-              />{" "}
-              モノラル
-            </label>
-            <span className="time">
-              <span ref={timeRef}>0:00.0</span> / {clock(track.frames / track.sampleRate)}
-            </span>
-          </section>
-
-          <section className="view-controls">
-            <span className="segmented" role="radiogroup" aria-label="波形の表示方法">
-              {LAYOUTS.map((l) => (
-                <button key={l.id} role="radio" aria-checked={layout === l.id} className={layout === l.id ? "on" : ""} onClick={() => setLayout(l.id)} title="キー V">
-                  {l.label}
-                </button>
-              ))}
-            </span>
-            {layout !== "single" && (
-              <span className="checks">
-                {(layout === "stacked" ? (["before", "after", "diff"] as Source[]) : (["diff"] as Source[])).map((s) => (
-                  <label key={s}>
-                    <input type="checkbox" checked={stacked[s]} onChange={() => setStacked({ ...stacked, [s]: !stacked[s] })} /> {{ before: "Before", after: "After", diff: "差分" }[s]}
-                  </label>
-                ))}
-              </span>
-            )}
-            <span className="segmented" role="radiogroup" aria-label="差分の表し方">
-              <button role="radio" aria-checked={diffKind === "gain"} className={diffKind === "gain" ? "on" : ""} onClick={() => setDiffKind("gain")} title="キー D">
-                差分：音量の変化
-              </button>
-              <button role="radio" aria-checked={diffKind === "signal"} className={diffKind === "signal" ? "on" : ""} onClick={() => setDiffKind("signal")} title="キー D">
-                差分：信号
-              </button>
-            </span>
-            {layout === "single" && <span className="note">「切り替え」は再生モード（Before / After / 差分）に連動します</span>}
-          </section>
-
-          <Waveform
-            totalFrames={track.frames}
-            sampleRate={track.sampleRate}
-            before={track.peaks}
-            after={rendered?.peaks.after ?? null}
-            diff={rendered?.peaks.diff ?? null}
-            gainDelta={rendered?.gainDelta ?? null}
-            player={player}
-            mode={mode}
-            layout={layout}
-            diffKind={diffKind}
-            stacked={stacked}
-            busy={busy}
-          />
+          <TrackView track={track} rendered={rendered} player={player} busy={busy} active={active} />
 
           <div className="panels">
             <section className="panel">
@@ -351,22 +214,7 @@ export function MasteringApp() {
 
             <section className="panel">
               <h2>測定値</h2>
-              <table className="meters">
-                <thead>
-                  <tr>
-                    <th />
-                    <th>Before</th>
-                    <th>After</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <MeterRow label="ラウドネス（LUFS）" b={track.before} a={rendered?.after} k="lufs" />
-                  <MeterRow label="True Peak（dBTP）" b={track.before} a={rendered?.after} k="truePeak" />
-                  <MeterRow label="PLR（dB）" b={track.before} a={rendered?.after} k="plr" />
-                  <MeterRow label="盛り上がり部の音量 L95" b={track.before} a={rendered?.after} k="l95" />
-                  <MeterRow label="ラウドネスレンジ LRA（LU）" b={track.before} a={rendered?.after} k="lra" />
-                </tbody>
-              </table>
+              <MeterTable before={track.before} after={rendered?.after} />
               {rendered && (
                 <p className="sub">
                   リミッター：入力ゲイン {rendered.report.appliedGainDb >= 0 ? "+" : ""}
@@ -421,21 +269,6 @@ function Slider(p: { label: string; hint: string; value: number; min: number; ma
       <span className="hint">{p.hint}</span>
     </label>
   );
-}
-
-function MeterRow({ label, b, a, k }: { label: string; b: Analysis; a?: Analysis; k: keyof Analysis }) {
-  return (
-    <tr>
-      <th scope="row">{label}</th>
-      <td>{fmt(b[k] as number)}</td>
-      <td>{a ? fmt(a[k] as number) : "…"}</td>
-    </tr>
-  );
-}
-
-function clock(sec: number) {
-  const m = Math.floor(sec / 60);
-  return `${m}:${(sec - m * 60).toFixed(1).padStart(4, "0")}`;
 }
 
 function errorText(e: unknown) {

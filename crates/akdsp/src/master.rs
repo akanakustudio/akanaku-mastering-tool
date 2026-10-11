@@ -9,6 +9,17 @@ use crate::dsp::limiter::{LimiterParams, limit};
 use crate::dsp::stereo::apply_stereo;
 use crate::dsp::tone::apply_tone;
 
+/// What `target_lufs` refers to (detailed design 10.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetMode {
+    /// Integrated loudness of the whole track (singles, album anchor).
+    #[default]
+    Integrated,
+    /// 95th percentile of short-term loudness, "the loud part" (other album tracks).
+    L95,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MasterSettings {
@@ -21,6 +32,7 @@ pub struct MasterSettings {
     /// Side high-pass (low-end mono), Hz; 0 = off.
     pub mono_below_hz: f32,
     pub target_lufs: f32,
+    pub target_mode: TargetMode,
     pub ceiling_dbtp: f32,
 }
 
@@ -33,6 +45,7 @@ impl Default for MasterSettings {
             width: 1.0,
             mono_below_hz: 120.0,
             target_lufs: -14.0,
+            target_mode: TargetMode::Integrated,
             ceiling_dbtp: -1.0,
         }
     }
@@ -102,7 +115,13 @@ pub fn render(
         ceiling_dbtp: s.ceiling_dbtp,
         ..Default::default()
     };
-    let measure = |y: &Stereo| loudness::integrated(&loudness::segments(y, sr)) as f32;
+    let measure = |y: &Stereo| {
+        let seg = loudness::segments(y, sr);
+        (match s.target_mode {
+            TargetMode::Integrated => loudness::integrated(&seg),
+            TargetMode::L95 => loudness::l95(&loudness::short_term(&seg)),
+        }) as f32
+    };
     let l_pre = measure(pre);
     let mut g = (s.target_lufs - l_pre).clamp(-24.0, 24.0);
     let mut prev: Option<(f32, f32)> = None;
@@ -144,5 +163,40 @@ pub fn render(
     Rendered {
         audio: out.audio,
         report,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::analyze;
+
+    fn music(secs: usize) -> Stereo {
+        // Two sections 6 dB apart, so integrated loudness and L95 differ.
+        let n = secs * 48_000;
+        let ch: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / 48_000.0;
+                let amp = if (i / 48_000) % 10 < 5 { 0.1 } else { 0.2 };
+                amp * (libm::sinf(2.0 * core::f32::consts::PI * 220.0 * t)
+                    + 0.5 * libm::sinf(2.0 * core::f32::consts::PI * 1760.0 * t))
+            })
+            .collect();
+        Stereo::new(ch.clone(), ch)
+    }
+
+    #[test]
+    fn hits_the_l95_target_in_l95_mode() {
+        let x = music(30);
+        let s = MasterSettings {
+            cleanup: 0.0,
+            target_lufs: -12.0,
+            target_mode: TargetMode::L95,
+            ..Default::default()
+        };
+        let r = render(&x, 48_000, &s, &mut ChainCache::default(), &mut |_, _| {});
+        let a = analyze(&r.audio, 48_000);
+        assert!((a.l95 - -12.0).abs() < 0.3, "l95 {}", a.l95);
+        assert!(a.true_peak <= -1.0, "tp {}", a.true_peak);
     }
 }

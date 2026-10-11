@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { devSecurityHeaders, securityHeaders } from "./security-headers";
 
@@ -10,4 +10,6 @@ export default defineConfig({
   preview: { host: "localhost", port: 5173, strictPort: true, headers: securityHeaders },
   worker: { format: "es" },
   build: { target: "es2022" },
+  // Unit tests only; e2e/ is run by Playwright.
+  test: { include: ["tests/**/*.test.ts"] },
 });

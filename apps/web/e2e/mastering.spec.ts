@@ -13,7 +13,7 @@ test("open → auto master → A/B → export", async ({ page }) => {
 
   await page.goto("/");
   const t0 = Date.now();
-  await page.locator('input[type="file"]').setInputFiles(song!);
+  await page.locator('.app:not(.album) input[type="file"]').setInputFiles(song!);
   await expect(page.getByRole("status")).toHaveText("準備完了", { timeout: 200_000 });
   const seconds = (Date.now() - t0) / 1000;
 

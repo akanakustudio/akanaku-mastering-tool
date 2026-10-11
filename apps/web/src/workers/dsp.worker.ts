@@ -1,7 +1,10 @@
 // DSP worker: loads the Rust/WASM engine and runs jobs off the main thread
 // (detailed design 3.1, 18.3).
-import init, { Engine, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
-import type { DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
+import { Zip, ZipPassThrough } from "fflate";
+import init, { Engine, analyze_file, encode_wav_planar, engine_version, peak_dbfs, rms_dbfs, simd_enabled } from "../wasm/pkg/akdsp_wasm.js";
+import { clearDir, openSync, readStereo, writeStereo } from "./opfs";
+import type { Analysis, DspMethods, FromWorker, LoadResult, Pyramid, Req, RenderResult, SelfTestResult } from "./protocol";
+import { cueSheet, dataChunk, pcmHeader, safeFileName } from "./wav";
 
 /** Peak pyramid levels sent to the waveform view (detailed design 11.1). */
 const PYRAMID_BINS = [256, 1024, 4096, 16384];
@@ -43,8 +46,7 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     await handlers.init();
     engine?.free();
     engine = new Engine();
-    const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : undefined;
-    const info = engine.load(new Uint8Array(bytes), ext);
+    const info = engine.load(new Uint8Array(bytes), extOf(name));
     const audio = { left: engine.channel("before", 0), right: engine.channel("before", 1) };
     const peaks = pyramid("before");
     const result: LoadResult = { ...info, audio, peaks };
@@ -62,6 +64,137 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     return { result, transfer: [audio.left.buffer, audio.right.buffer, ...buffers(peaks.after), ...buffers(peaks.diff), gainDelta.buffer] };
   },
 
+  async analyzeFile({ file }) {
+    await handlers.init();
+    const result = analyze_file(new Uint8Array(await file.arrayBuffer()), extOf(file.name));
+    return { result };
+  },
+
+  async renderToStore({ file, settings, key }) {
+    await handlers.init();
+    const e = new Engine();
+    try {
+      e.load(new Uint8Array(await file.arrayBuffer()), extOf(file.name));
+      const info = e.render(settings, progress);
+      progress("store", 0);
+      await writeStereo(`album/${key}.f32`, e.channel("after", 0), e.channel("after", 1));
+      return { result: { after: info.after, report: info.report } };
+    } finally {
+      e.free();
+    }
+  },
+
+  async openStored({ file, key, ceilingDbtp }) {
+    const { result: load, transfer: t1 = [] } = await handlers.load({ bytes: await file.arrayBuffer(), name: file.name });
+    const stored = await readStereo(`album/${key}.f32`);
+    const after: Analysis = engine!.adopt_after(stored.left, stored.right, ceilingDbtp);
+    const audio = { left: engine!.channel("after", 0), right: engine!.channel("after", 1) };
+    const peaks = { after: pyramid("after"), diff: pyramid("diff") };
+    const gainDelta = engine!.gain_delta();
+    const render: RenderResult = {
+      after,
+      report: { appliedGainDb: 0, iterations: 0, truePeakTrimDb: 0, meanGainReductionDb: 0, maxGainReductionDb: 0 },
+      audio,
+      peaks,
+      gainDelta,
+    };
+    return {
+      result: { load, render },
+      transfer: [...t1, audio.left.buffer, audio.right.buffer, ...buffers(peaks.after), ...buffers(peaks.diff), gainDelta.buffer],
+    };
+  },
+
+  async exportAlbum(p) {
+    await handlers.init();
+    await clearDir("export");
+    const files: string[] = [];
+    const bytesPerFrame = 2 * (p.bits / 8);
+    const contName = `${safeFileName(p.albumTitle)}.wav`;
+    const cont = p.continuous ? await openSync(`export/${contName}`) : null;
+    let contBytes = 0;
+    const starts: number[] = [];
+    try {
+      if (cont) cont.truncate(44); // header is written at the end
+      for (const [i, t] of p.tracks.entries()) {
+        progress(`export ${i + 1}/${p.tracks.length}`, i / p.tracks.length);
+        const { left, right } = await readStereo(`album/${t.key}.f32`);
+        const wav = encode_wav_planar(left, right, p.sampleRate, p.bits, p.ceilingDbtp);
+        if (p.perTrack) {
+          const name = `${String(i + 1).padStart(2, "0")} ${safeFileName(t.title)}.wav`;
+          const h = await openSync(`export/${name}`);
+          h.truncate(0);
+          h.write(wav, { at: 0 });
+          h.flush();
+          h.close();
+          files.push(name);
+        }
+        if (cont) {
+          const d = dataChunk(wav);
+          starts.push(contBytes / bytesPerFrame);
+          cont.write(wav.subarray(d.offset, d.offset + d.length), { at: 44 + contBytes });
+          contBytes += d.length;
+          if (i < p.tracks.length - 1 && t.gapAfterSec > 0) {
+            const gap = new Uint8Array(Math.round(t.gapAfterSec * p.sampleRate) * bytesPerFrame);
+            cont.write(gap, { at: 44 + contBytes });
+            contBytes += gap.length;
+          }
+        }
+      }
+      if (cont) {
+        cont.write(pcmHeader(contBytes, p.sampleRate, p.bits), { at: 0 });
+        cont.flush();
+        files.push(contName);
+        const cueName = `${safeFileName(p.albumTitle)}.cue`;
+        const cue = new TextEncoder().encode(cueSheet(contName, p.albumTitle, p.tracks.map((t) => t.title), starts, p.sampleRate));
+        const h = await openSync(`export/${cueName}`);
+        h.truncate(0);
+        h.write(cue, { at: 0 });
+        h.flush();
+        h.close();
+        files.push(cueName);
+      }
+    } finally {
+      cont?.close();
+    }
+
+    let zip: string | null = null;
+    if (p.zip) {
+      progress("zip", 0);
+      zip = `${safeFileName(p.albumTitle)}.zip`;
+      const out = await openSync(`export/${zip}`);
+      let at = 0;
+      let failed: Error | null = null;
+      const z = new Zip((err, chunk) => {
+        if (err) failed = err;
+        else {
+          out.write(chunk, { at });
+          at += chunk.length;
+        }
+      });
+      try {
+        for (const name of files) {
+          const entry = new ZipPassThrough(name);
+          z.add(entry);
+          const h = await openSync(`export/${name}`, false);
+          const size = h.getSize();
+          const buf = new Uint8Array(8 << 20);
+          for (let off = 0; off < size; off += buf.length) {
+            const n = h.read(buf, { at: off });
+            entry.push(buf.slice(0, n), off + n >= size);
+          }
+          if (size === 0) entry.push(new Uint8Array(0), true);
+          h.close();
+        }
+        z.end();
+        if (failed) throw failed;
+        out.flush();
+      } finally {
+        out.close();
+      }
+    }
+    return { result: { files, zip } };
+  },
+
   async exportWav({ sampleRate, bits }) {
     if (!engine) throw new Error("音源が読み込まれていません");
     progress("encode", 0);
@@ -70,22 +203,14 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
   },
 };
 
-// The project compiles against the DOM lib, which leaves out this worker-only API.
-type SyncAccessHandle = {
-  read(buffer: Uint8Array, options: { at: number }): number;
-  write(buffer: Uint8Array, options: { at: number }): number;
-  flush(): void;
-  close(): void;
-};
-type SyncFileHandle = FileSystemFileHandle & { createSyncAccessHandle(): Promise<SyncAccessHandle> };
+const extOf = (name: string) => (name.includes(".") ? name.split(".").pop()!.toLowerCase() : undefined);
 
 /** Safari can only write OPFS through sync access handles inside a worker (detailed design 3.1). */
 async function opfsSyncAccessCheck(): Promise<{ ok: boolean; detail: string }> {
   const name = `selftest-${crypto.randomUUID()}.bin`;
   try {
     const root = await navigator.storage.getDirectory();
-    const file = (await root.getFileHandle(name, { create: true })) as SyncFileHandle;
-    const handle = await file.createSyncAccessHandle();
+    const handle = await openSync(name);
     try {
       const data = new Uint8Array(1 << 20).map((_, i) => i & 0xff);
       handle.write(data, { at: 0 });

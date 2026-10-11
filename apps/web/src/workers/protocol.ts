@@ -18,7 +18,25 @@ export interface DspMethods {
   load: { params: { bytes: ArrayBuffer; name: string }; result: LoadResult };
   render: { params: { settings: MasterSettings }; result: RenderResult };
   exportWav: { params: { sampleRate: number; bits: 16 | 24 }; result: { bytes: ArrayBuffer } };
+  // Album (detailed design 10). Rendered audio is stored in OPFS under album/<key>.f32.
+  analyzeFile: { params: { file: File }; result: FileInfo };
+  renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport } };
+  openStored: { params: { file: File; key: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
+  exportAlbum: { params: ExportAlbumParams; result: { files: string[]; zip: string | null } };
 }
+
+export type FileInfo = { frames: number; sampleRateIn: number; channelsIn: number; analysis: Analysis };
+
+export type ExportAlbumParams = {
+  tracks: { key: string; title: string; gapAfterSec: number }[];
+  albumTitle: string;
+  sampleRate: number;
+  bits: 16 | 24;
+  ceilingDbtp: number;
+  perTrack: boolean;
+  continuous: boolean;
+  zip: boolean;
+};
 
 /** Mirrors akdsp::master::MasterSettings. */
 export type MasterSettings = {
@@ -27,6 +45,8 @@ export type MasterSettings = {
   width: number; // 0..1.5
   monoBelowHz: number;
   targetLufs: number;
+  /** "integrated" for singles and the album anchor, "l95" for the other album tracks. */
+  targetMode?: "integrated" | "l95";
   ceilingDbtp: number;
 };
 
