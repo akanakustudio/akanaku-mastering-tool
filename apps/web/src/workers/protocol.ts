@@ -16,7 +16,8 @@ export interface DspMethods {
   init: { params: void; result: { engineVersion: string; simd: boolean } };
   selfTest: { params: void; result: SelfTestResult };
   load: { params: { bytes: ArrayBuffer; name: string }; result: LoadResult };
-  render: { params: { settings: MasterSettings; cancel?: CancelToken }; result: RenderResult };
+  /** `storePath`: also keep the rendered audio in OPFS so the work can be restored instantly. */
+  render: { params: { settings: MasterSettings; cancel?: CancelToken; storePath?: string }; result: RenderResult };
   /** Loads the source into this worker's engine only (for region renders). */
   loadSource: { params: { bytes: ArrayBuffer; name: string }; result: Record<string, never> };
   renderRegion: {
@@ -27,7 +28,8 @@ export interface DspMethods {
   // Album (detailed design 10). Rendered audio is stored in OPFS under album/<key>.f32.
   analyzeFile: { params: { file: File }; result: FileInfo };
   renderToStore: { params: { file: File; settings: MasterSettings; key: string }; result: { after: Analysis; report: RenderReport } };
-  openStored: { params: { file: File; key: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
+  /** `key` is a path under OPFS album/ unless `path` gives the full OPFS path. */
+  openStored: { params: { file: File; key: string; path?: string; ceilingDbtp: number }; result: { load: LoadResult; render: RenderResult } };
   exportAlbum: { params: ExportAlbumParams; result: { files: string[]; zip: string | null } };
 }
 

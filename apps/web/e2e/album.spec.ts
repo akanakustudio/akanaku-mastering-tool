@@ -1,21 +1,8 @@
 // Album E2E (detailed design 10, 21.4 E2E-03): add songs → auto balance → listen → export ZIP.
 // AKM_E2E_ALBUM="/a.wav|/b.wav|/c.wav" npx playwright test e2e/album.spec.ts
-import { chromium, expect, test as base, webkit, type Page } from "@playwright/test";
 import { unzipSync } from "fflate";
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-// Playwright's default (ephemeral) WebKit context cannot write OPFS at all, unlike real Safari,
-// so the album test runs in a persistent context.
-const test = base.extend<{ page: Page }>({
-  page: async ({ browserName, baseURL }, use) => {
-    const type = browserName === "webkit" ? webkit : chromium;
-    const ctx = await type.launchPersistentContext(mkdtempSync(join(tmpdir(), "akm-e2e-")), { baseURL, acceptDownloads: true });
-    await use(await ctx.newPage());
-    await ctx.close();
-  },
-});
+import { readFileSync, statSync } from "node:fs";
+import { expect, test } from "./fixtures";
 
 const songs = process.env.AKM_E2E_ALBUM?.split("|").filter(Boolean) ?? [];
 
@@ -48,6 +35,14 @@ test("album: auto balance and export", async ({ page }) => {
   const anchorL95 = Number(anchorRow!.split("/")[1]);
   for (const v of l95) expect(v).toBeLessThanOrEqual(anchorL95 + 0.5);
   for (const v of tp) expect(v).toBeLessThanOrEqual(-1.0);
+
+  // Reload: the album (order, results) is restored from the saved session.
+  await page.waitForTimeout(1500); // autosave debounce
+  await page.reload();
+  await page.getByRole("tab", { name: "アルバム" }).click();
+  await expect(rows).toHaveCount(songs.length);
+  expect(await rows.locator("td:nth-child(5)").allTextContents()).toEqual(after);
+  await expect(page.getByRole("button", { name: "アルバムを書き出す" })).toBeEnabled();
 
   await rows.nth(1).getByRole("button", { name: "聴く" }).click();
   await expect(page.getByRole("button", { name: "▶ 再生" })).toBeEnabled({ timeout: 60_000 });

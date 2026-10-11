@@ -72,11 +72,12 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     return { result: r, transfer: [r.left.buffer, r.right.buffer] };
   },
 
-  async render({ settings, cancel }) {
+  async render({ settings, cancel, storePath }) {
     if (!engine) throw new Error("音源が読み込まれていません");
     const info = engine.render(settings, progressUnless(cancel));
     progress("display", 0);
     const audio = { left: engine.channel("after", 0), right: engine.channel("after", 1) };
+    if (storePath) await writeStereo(storePath, audio.left, audio.right);
     const peaks = { after: pyramid("after"), diff: pyramid("diff") };
     const gainDelta = engine.gain_delta();
     const result: RenderResult = { ...info, audio, peaks, gainDelta };
@@ -103,9 +104,9 @@ const handlers: { [K in keyof DspMethods]: Handler<K> } = {
     }
   },
 
-  async openStored({ file, key, ceilingDbtp }) {
+  async openStored({ file, key, path, ceilingDbtp }) {
     const { result: load, transfer: t1 = [] } = await handlers.load({ bytes: await file.arrayBuffer(), name: file.name });
-    const stored = await readStereo(`album/${key}.f32`);
+    const stored = await readStereo(path ?? `album/${key}.f32`);
     const after: Analysis = engine!.adopt_after(stored.left, stored.right, ceilingDbtp);
     const audio = { left: engine!.channel("after", 0), right: engine!.channel("after", 1) };
     const peaks = { after: pyramid("after"), diff: pyramid("diff") };
