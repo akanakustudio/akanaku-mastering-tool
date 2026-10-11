@@ -1,0 +1,9 @@
+[project]
+name = "akresearch"
+version = "0.1.0"
+description = "P0 algorithm prototypes and calibration (not shipped; detailed design 1, 22)"
+requires-python = ">=3.12,<3.13"
+dependencies = ["numpy", "scipy", "soundfile", "pyloudnorm"]
+
+[tool.uv]
+package = false
