@@ -1,0 +1,10 @@
+[package]
+name = "akdsp-cli"
+description = "Native CLI for golden tests, calibration and debugging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+akdsp = { path = "../akdsp" }

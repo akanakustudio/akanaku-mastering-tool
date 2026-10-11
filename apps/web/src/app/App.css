@@ -1,0 +1,10 @@
+.env { max-width: 960px; margin: 48px auto; padding: 0 24px; }
+.env h1 { margin: 0 0 4px; font-size: 24px; }
+.env .sub { margin: 0 0 24px; color: var(--text-muted); font-size: 14px; }
+.env table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.env th, .env td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; font-size: 14px; vertical-align: top; }
+.env th { white-space: nowrap; font-weight: 600; }
+.env .icon { width: 32px; text-align: center; font-weight: 700; font-family: var(--font-num); }
+.env tr.ok .icon { color: var(--ok); }
+.env tr.warn .icon { color: var(--warn); }
+.env tr.error .icon { color: var(--danger); }

@@ -1,0 +1,13 @@
+{
+  "name": "akanaku-mastering-tool",
+  "private": true,
+  "workspaces": ["apps/web"],
+  "scripts": {
+    "start": "scripts/start.sh",
+    "dev": "scripts/dev.sh",
+    "doctor": "scripts/doctor.sh",
+    "build:wasm": "scripts/build-wasm.sh",
+    "build:wasm:dev": "scripts/build-wasm.sh --dev",
+    "test": "cargo test && npm run test -w apps/web"
+  }
+}
