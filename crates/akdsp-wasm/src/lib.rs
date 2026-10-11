@@ -158,6 +158,30 @@ impl Engine {
         }
     }
 
+    /// Adopts a previously rendered "after" (e.g. read back from OPFS) so peaks, the gain
+    /// delta and export work without rendering again. Returns its analysis.
+    pub fn adopt_after(
+        &mut self,
+        left: Vec<f32>,
+        right: Vec<f32>,
+        ceiling_dbtp: f32,
+    ) -> Result<JsValue, JsError> {
+        if left.len() != self.source.len() || right.len() != left.len() {
+            return Err(JsError::new(
+                "保存されている処理結果の長さが元の音源と一致しません",
+            ));
+        }
+        let audio = Stereo::new(left, right);
+        let after = analyze(&audio, INTERNAL_SAMPLE_RATE);
+        let js = to_js(&after);
+        let settings = MasterSettings {
+            ceiling_dbtp,
+            ..MasterSettings::default()
+        };
+        self.after = Some((audio, after, settings));
+        js
+    }
+
     /// One channel (0 = L, 1 = R) of "before" or "after", for the player.
     pub fn channel(&self, which: &str, ch: u32) -> Result<Vec<f32>, JsError> {
         let x = self.pick(which)?;
@@ -218,4 +242,47 @@ impl Engine {
 
 fn libm_pow10(x: f64) -> f64 {
     10f64.powf(x)
+}
+
+/// Analysis of a file without keeping it (album import). Returns `{ frames, sampleRateIn, channelsIn, analysis }`.
+#[wasm_bindgen]
+pub fn analyze_file(bytes: Vec<u8>, extension: Option<String>) -> Result<JsValue, JsError> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Info {
+        frames: usize,
+        sample_rate_in: u32,
+        channels_in: usize,
+        analysis: Analysis,
+    }
+    let d = decode(bytes, extension.as_deref()).map_err(|e| JsError::new(&e.to_string()))?;
+    let x = if d.sample_rate == INTERNAL_SAMPLE_RATE {
+        d.audio
+    } else {
+        Stereo::new(
+            resample(&d.audio.l, d.sample_rate, INTERNAL_SAMPLE_RATE),
+            resample(&d.audio.r, d.sample_rate, INTERNAL_SAMPLE_RATE),
+        )
+    };
+    to_js(&Info {
+        frames: x.len(),
+        sample_rate_in: d.sample_rate,
+        channels_in: d.channels,
+        analysis: analyze(&x, INTERNAL_SAMPLE_RATE),
+    })
+}
+
+/// Encodes 48 kHz planar audio as a WAV file (album export).
+#[wasm_bindgen]
+pub fn encode_wav_planar(
+    left: Vec<f32>,
+    right: Vec<f32>,
+    sample_rate: u32,
+    bits: u16,
+    ceiling_dbtp: f32,
+) -> Result<Vec<u8>, JsError> {
+    let x = Stereo::new(left, right);
+    let enc = encode_wav(&x, INTERNAL_SAMPLE_RATE, sample_rate, bits, ceiling_dbtp)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(enc.bytes)
 }
