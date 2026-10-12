@@ -119,6 +119,15 @@ test("album: auto balance and export", async ({ page }) => {
   expect(names.filter((n) => n.endsWith(".wav")).length).toBe(songs.length + 1);
   expect(names.some((n) => n.endsWith(".cue"))).toBe(true);
   expect(new TextDecoder().decode(zip[names.find((n) => n.endsWith(".cue"))!])).toContain("TRACK 03 AUDIO");
+  const log = new TextDecoder().decode(zip["mastering-log.txt"]);
+  console.log(log);
+  expect(log).toContain(`（${songs.length} 曲・`);
+  expect(log).toContain("基準曲（曲全体のラウドネスを");
+  expect(log).toContain("[03] ");
+  const json = JSON.parse(new TextDecoder().decode(zip["mastering-log.json"]));
+  expect(json.tracks.length).toBe(songs.length);
+  expect(json.tracks.every((t: { output?: { fileName: string } }) => names.includes(t.output!.fileName))).toBe(true);
+  expect(json.album.continuousFile).toBeTruthy();
   // The fade-out reaches silence at the end of track 1 (24-bit PCM, last 10 ms).
   const first = zip[names.find((n) => n.startsWith("01 "))!];
   const tail = new DataView(first.buffer, first.byteOffset + first.length - 441 * 6, 441 * 6);

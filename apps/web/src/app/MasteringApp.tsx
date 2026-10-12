@@ -7,6 +7,8 @@ import { MeterTable, TrackView } from "../features/trackview/TrackView";
 import { WorkerClient } from "../orchestrator/workerClient";
 import { exportProject, importProject } from "../features/project/project";
 import { ProjectPanel } from "../features/project/ProjectPanel";
+import { zipSync } from "fflate";
+import { LOG_JSON, LOG_TXT, formatLog, levelsOf, sha256Hex, type MasteringLog } from "../features/report/masteringLog";
 import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, saveWorkspace, storeSource } from "../storage/workspace";
 import type { ChainStats, DspMethods, LoadResult, MasterSettings, RenderReport, RenderResult } from "../workers/protocol";
 import { runMainThreadChecks, type CheckResult } from "./envCheck";
@@ -60,6 +62,7 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [exportRate, setExportRate] = useState(44_100);
   const [exportBits, setExportBits] = useState<16 | 24>(24);
+  const [includeLog, setIncludeLog] = useState(true);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   // Last full render: its statistics and settings feed region renders.
@@ -264,11 +267,55 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
     if (!track) return;
     setStatus({ kind: "busy", label: "書き出し中…" });
     try {
-      const { bytes } = await dsp.call("exportWav", { sampleRate: exportRate, bits: exportBits });
-      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+      const { bytes, truePeakDbtp } = await dsp.call("exportWav", { sampleRate: exportRate, bits: exportBits });
+      const base = `${track.name.replace(/\.[^.]+$/, "")} (akanaku master ${exportRate / 1000}k-${exportBits}bit)`;
+      let blob: Blob;
+      let fileName: string;
+      if (includeLog && rendered && savedRender) {
+        const source = sourceId ? await loadSource(sourceId) : undefined;
+        const { engineVersion } = await dsp.call("init", undefined);
+        const used = JSON.parse(savedRender.settingsJson) as MasterSettings;
+        const log: MasteringLog = {
+          format: "akmaster-log",
+          version: 1,
+          tool: { name: "akanaku mastering tool", engineVersion },
+          exportedAt: new Date().toISOString(),
+          export: { sampleRate: exportRate, bits: exportBits, dither: exportBits === 16 ? "TPDF（16 bit 化の際に付加）" : "なし（24 bit）", ceilingDbtp: used.ceilingDbtp },
+          tracks: [
+            {
+              title: track.name.replace(/\.[^.]+$/, ""),
+              source: {
+                fileName: track.name,
+                sizeBytes: source?.size ?? 0,
+                sha256: source ? await sha256Hex(source) : "（元のファイルが見つかりません）",
+                sampleRateIn: track.sampleRateIn,
+                channelsIn: track.channelsIn,
+                durationSec: track.frames / track.sampleRate,
+              },
+              before: levelsOf(track.before),
+              settings: used,
+              report: savedRender.report,
+              stats: savedRender.stats,
+              after: levelsOf(rendered.after),
+              output: { fileName: `${base}.wav`, truePeakDbtp },
+            },
+          ],
+        };
+        const enc = new TextEncoder();
+        const zip = zipSync(
+          { [`${base}.wav`]: new Uint8Array(bytes), [LOG_TXT]: enc.encode(formatLog(log)), [LOG_JSON]: enc.encode(JSON.stringify(log, null, 2)) },
+          { level: 0 },
+        );
+        blob = new Blob([zip], { type: "application/zip" });
+        fileName = `${base}.zip`;
+      } else {
+        blob = new Blob([bytes], { type: "audio/wav" });
+        fileName = `${base}.wav`;
+      }
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${track.name.replace(/\.[^.]+$/, "")} (akanaku master ${exportRate / 1000}k-${exportBits}bit).wav`;
+      a.download = fileName;
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setStatus({ kind: "idle" });
@@ -390,8 +437,12 @@ export function MasteringApp({ active = true }: { active?: boolean }) {
                   <option value={16}>16 bit（ディザあり）</option>
                 </select>
               </label>
+              <label className="check">
+                <input type="checkbox" checked={includeLog} onChange={(e) => setIncludeLog(e.target.checked)} />
+                処理ログを含める（WAV とログを ZIP でまとめる）
+              </label>
               <button className="primary" onClick={exportWav} disabled={busy || !rendered}>
-                WAV を書き出す
+                {includeLog ? "WAV＋ログを書き出す" : "WAV を書き出す"}
               </button>
             </section>
           </div>

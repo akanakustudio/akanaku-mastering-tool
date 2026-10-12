@@ -12,7 +12,8 @@ import { WorkerClient } from "../orchestrator/workerClient";
 import { exportProject, importProject } from "../features/project/project";
 import { ProjectPanel } from "../features/project/ProjectPanel";
 import { autosaver, clearWorkspace, deleteRendered, deleteSources, loadSource, loadWorkspace, saveWorkspace, storeSource } from "../storage/workspace";
-import type { Analysis, DspMethods, MasterSettings, RenderReport } from "../workers/protocol";
+import type { Analysis, ChainStats, DspMethods, MasterSettings, RenderReport } from "../workers/protocol";
+import { levelsOf, sha256Hex, type MasteringLog, type TrackLog } from "../features/report/masteringLog";
 import "./AlbumApp.css";
 
 const AUDIO_EXT = /\.(wav|wave|aif|aiff|flac|mp3|m4a|mp4|aac|caf)$/i;
@@ -31,6 +32,9 @@ type Result = {
   albumToneMaxDb?: number;
   /** Timeline peaks of the render: [min, max, rms] per 0.1 s. */
   afterPeaks?: number[];
+  /** Settings and chain statistics of the render, for the mastering log (absent in older saves). */
+  settings?: MasterSettings;
+  stats?: ChainStats;
 };
 type AlbumTrack = {
   id: string;
@@ -38,6 +42,7 @@ type AlbumTrack = {
   title: string;
   frames: number;
   sampleRateIn: number;
+  channelsIn?: number;
   before?: Analysis;
   /** Average spectrum of the unprocessed track (album tone harmonisation, 10.3). */
   spectrum?: number[];
@@ -332,7 +337,7 @@ export function AlbumApp({ active }: { active: boolean }) {
       setJob(`解析中 ${i + 1}/${added.length}：${t.title}`);
       try {
         const info = await batch.call("analyzeFile", { file: t.file });
-        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, before: info.analysis, spectrum: info.spectrum, beforePeaks: compact(info.peaks), state: "ready" });
+        update(t.id, { frames: info.frames, sampleRateIn: info.sampleRateIn, channelsIn: info.channelsIn, before: info.analysis, spectrum: info.spectrum, beforePeaks: compact(info.peaks), state: "ready" });
       } catch (e) {
         update(t.id, { state: "error", error: errorText(e) });
       }
@@ -381,25 +386,23 @@ export function AlbumApp({ active }: { active: boolean }) {
       let n = 0;
       if (!anchorAfter) {
         n++;
-        const res = await renderTrack(
-          a,
-          { ...common, targetLufs: common.targetLufs + a.offsetDb, targetMode: "integrated", albumTone: tone.get(a.id) },
-          `${n}/${todo.length} ${a.title}（基準曲）`,
-        );
+        const settings: MasterSettings = { ...common, targetLufs: common.targetLufs + a.offsetDb, targetMode: "integrated", albumTone: tone.get(a.id) };
+        const res = await renderTrack(a, settings, `${n}/${todo.length} ${a.title}（基準曲）`);
         anchorAfter = res.after;
         update(a.id, {
           state: "ready",
-          result: { after: res.after, report: res.report, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true, planKey, albumToneMaxDb: toneMax(a.id), afterPeaks: compact(res.peaks) },
+          result: { after: res.after, report: res.report, version, offsetDb: a.offsetDb, goal: common.targetLufs + a.offsetDb, anchor: true, planKey, albumToneMaxDb: toneMax(a.id), afterPeaks: compact(res.peaks), settings, stats: res.stats },
         });
       }
       for (const t of todo) {
         if (t.id === aId) continue;
         n++;
         const goal = l95Goal({ id: t.id, l95Before: t.before!.l95, offsetDb: t.offsetDb }, { id: a.id, l95Before: a.before!.l95, offsetDb: 0 }, anchorAfter.l95, keep);
-        const res = await renderTrack(t, { ...common, targetLufs: goal, targetMode: "l95", albumTone: tone.get(t.id) }, `${n}/${todo.length} ${t.title}`);
+        const settings: MasterSettings = { ...common, targetLufs: goal, targetMode: "l95", albumTone: tone.get(t.id) };
+        const res = await renderTrack(t, settings, `${n}/${todo.length} ${t.title}`);
         update(t.id, {
           state: "ready",
-          result: { after: res.after, report: res.report, version, offsetDb: t.offsetDb, goal, anchor: false, planKey, albumToneMaxDb: toneMax(t.id), afterPeaks: compact(res.peaks) },
+          result: { after: res.after, report: res.report, version, offsetDb: t.offsetDb, goal, anchor: false, planKey, albumToneMaxDb: toneMax(t.id), afterPeaks: compact(res.peaks), settings, stats: res.stats },
         });
       }
     } catch (e) {
@@ -470,6 +473,59 @@ export function AlbumApp({ active }: { active: boolean }) {
     void deleteRendered([`album/${id}.f32`]);
   };
 
+  /** Mastering log of the current album (written next to the exported audio). */
+  const albumLog = async (): Promise<MasteringLog> => {
+    const { engineVersion } = await batch.call("init", undefined);
+    const logs: TrackLog[] = [];
+    for (const [i, t] of tracks.entries()) {
+      setJob(`ログの作成：${t.title}`);
+      const r = t.result!;
+      const settings = r.settings ?? { ...common, targetLufs: r.goal, targetMode: r.anchor ? "integrated" : "l95" };
+      logs.push({
+        no: i + 1,
+        title: t.title,
+        source: {
+          fileName: t.file.name,
+          sizeBytes: t.file.size,
+          sha256: await sha256Hex(t.file),
+          sampleRateIn: t.sampleRateIn,
+          channelsIn: t.channelsIn ?? 2,
+          durationSec: t.frames / 48_000,
+        },
+        before: levelsOf(t.before!),
+        settings,
+        report: r.report,
+        stats: r.stats,
+        after: levelsOf(r.after),
+        album: {
+          role: r.anchor ? "anchor" : "track",
+          goalL95: r.anchor ? undefined : r.goal,
+          offsetDb: t.offsetDb,
+          gapAfterSec: i < tracks.length - 1 ? t.gapAfterSec : 0,
+          fadeInSec: t.fadeInSec,
+          fadeOutSec: t.fadeOutSec,
+          albumToneMaxDb: r.albumToneMaxDb,
+        },
+      });
+    }
+    const anchorTrack = tracks.find((t) => t.result?.anchor);
+    return {
+      format: "akmaster-log",
+      version: 1,
+      tool: { name: "akanaku mastering tool", engineVersion },
+      exportedAt: new Date().toISOString(),
+      export: { sampleRate: exportRate, bits: exportBits, dither: exportBits === 16 ? "TPDF（16 bit 化の際に付加）" : "なし（24 bit）", ceilingDbtp: common.ceilingDbtp },
+      album: {
+        title: albumTitle,
+        keepDifference: keep,
+        harmonize,
+        anchorTitle: anchorTrack?.title ?? "",
+        totalSec: tracks.reduce((s, t, i) => s + t.frames / 48_000 + (i < tracks.length - 1 ? t.gapAfterSec : 0), 0),
+      },
+      tracks: logs,
+    };
+  };
+
   const exportAlbum = async () => {
     setError(null);
     type DirPicker = (o: { mode: "readwrite" }) => Promise<FileSystemDirectoryHandle>;
@@ -484,6 +540,7 @@ export function AlbumApp({ active }: { active: boolean }) {
     }
     try {
       setJob("書き出し中…");
+      const log = await albumLog();
       const res = await batch.call(
         "exportAlbum",
         {
@@ -495,6 +552,7 @@ export function AlbumApp({ active }: { active: boolean }) {
           perTrack,
           continuous,
           zip: !dirHandle,
+          log,
         },
         [],
         (stage, f) => setJob(`${stage.startsWith("export") ? `書き出し ${stage.slice(7)}` : (STAGE_LABEL[stage] ?? stage)}${f > 0 ? ` ${Math.round(f * 100)}%` : ""}`),
@@ -924,6 +982,7 @@ export function AlbumApp({ active }: { active: boolean }) {
             </div>
             <p className="sub">
               {"showDirectoryPicker" in window ? "保存先のフォルダーを選んで、そこに直接書き出します。" : "このブラウザでは ZIP ファイルとしてダウンロードします。"}
+              処理の内容は mastering-log.txt（読みやすい形式）と mastering-log.json に記録されます。
               {!allDone && " 先に「自動バランス」で全曲を処理してください。"}
             </p>
           </section>
