@@ -60,6 +60,9 @@ test("album: auto balance and export", async ({ page }) => {
   });
   await expect(page.locator(".timeline-canvas")).toHaveCSS("height", "240px");
   if (process.env.AKM_E2E_SHOT) await page.locator(".timeline-wave").screenshot({ path: `${process.env.AKM_E2E_SHOT}-${test.info().project.name}-after.png` });
+  // Before comes first, After is selected by default.
+  await expect(page.getByRole("radiogroup", { name: "タイムラインに表示する音" }).getByRole("radio")).toHaveText(["Before（処理前）", "After（処理後）"]);
+  await expect(page.getByRole("radio", { name: "After（処理後）" })).toHaveAttribute("aria-checked", "true");
   await page.getByRole("radio", { name: "Before（処理前）" }).click();
   expect(await inked()).toBeGreaterThan(0.3);
   if (process.env.AKM_E2E_SHOT) await page.locator(".timeline-wave").screenshot({ path: `${process.env.AKM_E2E_SHOT}-${test.info().project.name}-before.png` });
