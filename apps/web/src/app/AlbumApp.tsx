@@ -898,7 +898,7 @@ export function AlbumApp({ active }: { active: boolean }) {
             </div>
             <div className="timeline-options">
               <span className="segmented" role="radiogroup" aria-label="タイムラインに表示する音">
-                {(["after", "before"] as const).map((v) => (
+                {(["before", "after"] as const).map((v) => (
                   <button key={v} role="radio" aria-checked={timelineView === v} className={timelineView === v ? "on" : ""} onClick={() => setTimelineView(v)}>
                     {v === "after" ? "After（処理後）" : "Before（処理前）"}
                   </button>
